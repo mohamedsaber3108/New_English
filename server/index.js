@@ -19,7 +19,10 @@ app.use('/api',operationsRouter(customer,{root}));
 // Paid-content gate. Access enforcement is INDEPENDENT of payment-provider configuration (fail closed).
 // Only ACCESS_ENFORCEMENT=open serves learning content without an entitlement; the absence of Paymob keys never opens it.
 const paid=(tier='essential')=>(req,res,next)=>{if(!customer.enforcementEnabled())return next();return customer.requireUser(req,res,()=>customer.active(req.customer,'English',tier)?next():res.status(402).json({error:'اشتراك الإنجليزية غير نشط. افتح صفحة حسابك لاختيار باقة.'}))};
-app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:!!process.env.OPENAI_API_KEY,paymentConfigured:customer.paymentEnabled(),accessEnforcement:customer.enforcementEnabled(),accessMode:customer.accessMode(),languagePacks:Object.keys(packs)}));
+// Liveness: process is up. Cheap, no dependencies — safe for load-balancer liveness probes.
+app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:!!process.env.OPENAI_API_KEY,paymentConfigured:customer.paymentEnabled(),accessEnforcement:customer.enforcementEnabled(),accessMode:customer.accessMode(),storageBackend:customer.storageBackend(),languagePacks:Object.keys(packs)}));
+// Readiness: storage is reachable. Use this for load-balancer readiness/rolling-deploy gates.
+app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h})}catch(e){res.status(503).json({ready:false,error:'storage unavailable'})}});
 const leadRate=new Map();
 const todayCairo=()=>{const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}`};
 app.post('/api/leads',async(req,res)=>{

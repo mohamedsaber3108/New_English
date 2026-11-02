@@ -62,7 +62,7 @@ const assert=(cond,msg)=>{if(cond){console.log('  PASS:',msg)}else{console.error
   const s=await startServer({ACCESS_ENFORCEMENT:'enforced'});
   try{
     await waitReady(s.origin);
-    const reg=await fetch(s.origin+'/api/customer/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'No Sub',email:'nosub@example.com',phone:'01000000000',password:'correct-horse-battery'})});
+    const reg=await fetch(s.origin+'/api/customer/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'No Sub',email:`nosub-${Date.now()}-${Math.random().toString(36).slice(2,8)}@example.com`,phone:'01000000000',password:'correct-horse-battery'})});
     const cookie=(reg.headers.get('set-cookie')||'').split(';')[0];
     assert(reg.status===201&&cookie,'registered a user and received a session cookie');
     const status=await callFeedback(s.origin,cookie);

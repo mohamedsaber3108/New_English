@@ -21,7 +21,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | 2 | Deliverable docs: inventory, engine registry, API inventory, RTM | IN PROGRESS |
 | 3 | Frontend correctness: 404/error pages, single pricing source | TODO |
 | 4 | Learning engine depth: review (SM-2) DONE; placement, writing, recommendation | IN PROGRESS |
-| 5 | Persistence: PostgreSQL migration behind existing API contracts | TODO |
+| 5 | Persistence: PostgreSQL migration behind existing API contracts | DONE (document model) |
 | 6 | Scale: Redis sessions/cache, stateless app, WS coordination | TODO |
 | 7 | Admin/operations UI (replace raw JSON viewer) | TODO |
 | 8 | Observability: structured logs, metrics, health/readiness | TODO |
@@ -96,7 +96,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 
 | Item | Status | Notes |
 |---|---|---|
-| Storage | PARTIAL | single-process JSON file; must migrate to PostgreSQL |
+| Storage | DONE (document model) | `server/storage.js` adapter: JSON (default) or PostgreSQL via DATABASE_URL. PG uses row-locked txns, pooling, survives restart, shared across instances. Verified by `tests/storage.pg.test.mjs` + full app smoke/access run against real PG 16 (Docker). NEXT: normalized per-entity tables for write-concurrency at the top of the 100k range (contract unchanged). |
 | Shared cache / sessions (Redis) | TODO | required for stateless multi-instance |
 | Object storage for media | TODO | no uploads today |
 | Background workers / queue | TODO | none |
