@@ -1,0 +1,9 @@
+# Aws Ec2 Architecture Deployment And Rollback
+
+EC2 uses Ubuntu LTS, Node 20+, Nginx, TLS and a dedicated service user. Code lives under /opt, private data under /var/lib, secrets at /etc/usam-language.env. Deploy runs npm ci/check/build/test, installs systemd/Nginx, health checks and provider staging. Rollback restores the previous immutable release and repeats health/core-journey checks.
+
+## Acceptance and status
+**Implemented** means present in source and covered by build or smoke evidence. **Configured** means code exists but needs a deployment secret/provider account. **Planned** means no production claim. English is the only active paid language pack; placement is guidance rather than an accredited CEFR certificate.
+
+## Ownership and review
+Product owns scope and copy; engineering owns implementation and observability; content owns language quality and rights; operations owns support and reconciliation; legal/finance own policy, tax and retention sign-off. Review this file when its mapped feature or gate changes.
