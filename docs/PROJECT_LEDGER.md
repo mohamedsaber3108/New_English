@@ -20,7 +20,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | 1 | Critical security: access enforcement decoupled from payment | DONE |
 | 2 | Deliverable docs: inventory, engine registry, API inventory, RTM | IN PROGRESS |
 | 3 | Frontend correctness: 404/error pages, single pricing source | TODO |
-| 4 | Learning engine depth: placement, writing, review (FSRS), recommendation | TODO |
+| 4 | Learning engine depth: review (SM-2) DONE; placement, writing, recommendation | IN PROGRESS |
 | 5 | Persistence: PostgreSQL migration behind existing API contracts | TODO |
 | 6 | Scale: Redis sessions/cache, stateless app, WS coordination | TODO |
 | 7 | Admin/operations UI (replace raw JSON viewer) | TODO |
@@ -77,7 +77,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Writing evaluation | PARTIAL | regex heuristics in `assessText`; no real grammar engine |
 | Pronunciation | PARTIAL | browser Web Speech transcript compare; no phoneme scoring |
 | Interactive stories | PARTIAL | one 3-step story |
-| Spaced repetition / review | PARTIAL | simple interval scheduler; not calibrated FSRS |
+| Spaced repetition / review | DONE | SM-2 engine `server/scheduler.js`, 35 unit tests, shared client+server; FSRS upgrade path documented in module |
 | Group voice rooms | PARTIAL | in-memory text WebSocket, max 4, no voice/moderation/persistence |
 | Gamification (XP/streak) | DONE | client-side; persisted to profile |
 | Progress analytics | PARTIAL | session list + skill estimates; no deep analytics |
