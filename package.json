@@ -13,7 +13,8 @@
     "test:api": "node tests/api-smoke.mjs",
     "test:access": "node tests/access-enforcement.mjs",
     "test:unit": "node tests/scheduler.test.mjs",
-    "test:engine": "node tests/engine.test.mjs",`n    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs"
+    "test:engine": "node tests/engine.test.mjs",
+    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.7.0",
