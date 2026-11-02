@@ -10,6 +10,7 @@ let x=await call('/api/customer/register',{method:'POST',body:{name:'Test Learne
 if(!(await call('/api/customer/me')).r.ok)throw Error('me');
 if(!(await call('/api/customer/preferences',{method:'PUT',body:{product:true,learning:false,marketing:true}})).r.ok)throw Error('preferences');
 if((await call('/api/customer/support',{method:'POST',body:{category:'technical',subject:'Smoke test',message:'A useful test support message'}})).r.status!==201)throw Error('support');
+const cat=await call('/api/customer/catalog');if(!cat.r.ok)throw Error('catalog');if(cat.data.prices?.essential?.monthly!==300||cat.data.prices?.essential?.yearly!==3000||cat.data.prices?.plus?.monthly!==450||cat.data.prices?.plus?.yearly!==4500)throw Error('catalog prices (server is the source of truth) changed unexpectedly: '+JSON.stringify(cat.data.prices));
 if((await call('/api/customer/orders',{method:'POST',body:{plan:'essential',term:'monthly',language:'English'}})).r.status!==201)throw Error('order');
 if((await call('/api/admin/overview')).r.status!==401)throw Error('admin deny');
 if(!(await call('/api/admin/overview',{auth:admin})).r.ok)throw Error('admin allow');
