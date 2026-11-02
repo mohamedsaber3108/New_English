@@ -50,7 +50,9 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Email verification | BLOCKED | code done; needs Resend API key + verified domain |
 | Password reset (one-use token) | BLOCKED | code done; needs Resend |
 | Account deletion (self-service) | DONE | `DELETE /api/customer/account` with password confirm |
-| Account/profile edit (name/phone/email/password) | TODO | audit §4.3: no edit UI/API yet |
+| Account/profile edit (name/phone) | DONE | `PATCH /customer/account` + Account UI; smoke-tested (valid + validation) |
+| Change password | DONE | `POST /customer/password/change`; verifies current, revokes other sessions; smoke-tested (wrong/same/valid) |
+| Email change (re-verify) | TODO | intentionally deferred; triggers verify flow |
 | Session management UI | DONE | list/revoke sessions in Settings |
 
 ## 3. Payments & entitlements
