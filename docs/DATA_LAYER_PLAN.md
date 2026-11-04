@@ -51,7 +51,7 @@ inside the caller's transaction. Retention default: keep all (table); `AUDIT_MAX
 4. [ ] operations.js on repo (tokens, preferences, sessions, support, receipts, analytics)
 5. [ ] admin.js on repo (SQL search/filter/pagination/aggregates)
 6. [ ] index.js (leads, WS session lookup, health/ready), scripts
-7. [ ] legacy import + test (JSON doc and app_state)
+7. [x] legacy import + test (JSON doc and app_state)
 8. [ ] port tests that touched the document directly (tamper test, MFA sealed-secret check, storage tests)
 9. [ ] full regression default (PGlite) + PG16 + Redis, E2E, builds
 10. [ ] load test Baseline 2, docs, ledger

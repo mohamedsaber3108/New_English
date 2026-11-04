@@ -11,7 +11,7 @@
     "build:app": "vite build",
     "test:e2e": "node tests/e2e/admin.e2e.mjs",
     "start": "NODE_ENV=production node server/index.js",
-    "check": "node scripts/check-deps.mjs && node --check server/index.js && node --check server/engine.js && node --check server/customer.js && node --check server/operations.js && node --check server/storage.js && node --check server/scheduler.js && node --check server/ratelimit.js && node --check server/rooms.js && node --check server/admin.js && node --check server/audit.js && node --check server/passwords.js && node --check server/totp.js && node --check server/db/index.js && node --check server/db/repo.js && node --check scripts/create-admin.mjs && node --check scripts/activate-manual.mjs",
+    "check": "node scripts/check-deps.mjs && node --check server/index.js && node --check server/engine.js && node --check server/customer.js && node --check server/operations.js && node --check server/storage.js && node --check server/scheduler.js && node --check server/ratelimit.js && node --check server/rooms.js && node --check server/admin.js && node --check server/audit.js && node --check server/passwords.js && node --check server/totp.js && node --check server/db/index.js && node --check server/db/repo.js && node --check server/db/legacy-import.js && node --check scripts/create-admin.mjs && node --check scripts/activate-manual.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "admin:activate": "node scripts/activate-manual.mjs",
     "test:api": "node tests/api-smoke.mjs",
