@@ -11,13 +11,13 @@ const admin='a'.repeat(40);
 function startServer(extraEnv){
   return mkdtemp(join(tmpdir(),'usam-access-')).then(dir=>{
     const port=4200+Math.floor(Math.random()*300);
-    const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),CUSTOMER_DB_FILE:join(dir,'customers.json'),LEADS_FILE:join(dir,'leads.jsonl'),ADMIN_ACCESS_TOKEN:admin,NODE_ENV:'test',...extraEnv},stdio:['ignore','pipe','pipe']});
+    const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),CUSTOMER_DB_FILE:join(dir,'customers.json'),LEADS_FILE:join(dir,'leads.jsonl'),ADMIN_ACCESS_TOKEN:admin,NODE_ENV:'test',RATE_LIMIT_PREFIX:'t'+Date.now()+Math.random().toString(36).slice(2,8),...extraEnv},stdio:['ignore','pipe','pipe']});
     return {dir,port,child,origin:`http://127.0.0.1:${port}`};
   });
 }
 
 async function waitReady(origin){
-  for(let i=0;i<50;i++){try{if((await fetch(origin+'/api/health')).ok)return true}catch{}await new Promise(r=>setTimeout(r,100))}
+  for(let i=0;i<150;i++){try{if((await fetch(origin+'/api/health')).ok)return true}catch{}await new Promise(r=>setTimeout(r,100))}
   throw Error('server did not start');
 }
 

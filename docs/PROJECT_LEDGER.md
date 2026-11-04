@@ -46,7 +46,8 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 |---|---|---|
 | Register (scrypt N=2^17) | DONE | `server/customer.js` |
 | Login / logout / sessions | DONE | HttpOnly SameSite cookie, server-side session store |
-| Login throttling | PARTIAL | in-memory per-IP; resets on restart (needs shared store at scale) |
+| Login throttling | DONE | `server/ratelimit.js`: 10/15min per IP + 20/15min per email; Redis-shared across instances (REDIS_URL), memory fallback; fails open if Redis down. Proven by `tests/abuse-limits.mjs` incl. 2 instances sharing one Redis |
+| Forgot/reset/verify throttling | DONE | same throttle applied to password/forgot, password/reset, email/verify, email/verification (anti email-bombing / token guessing) |
 | Email verification | BLOCKED | code done; needs Resend API key + verified domain |
 | Password reset (one-use token) | BLOCKED | code done; needs Resend |
 | Account deletion (self-service) | DONE | `DELETE /api/customer/account` with password confirm |
@@ -99,7 +100,9 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Item | Status | Notes |
 |---|---|---|
 | Storage | DONE (document model) | `server/storage.js` adapter: JSON (default) or PostgreSQL via DATABASE_URL. PG uses row-locked txns, pooling, survives restart, shared across instances. Verified by `tests/storage.pg.test.mjs` + full app smoke/access run against real PG 16 (Docker). NEXT: normalized per-entity tables for write-concurrency at the top of the 100k range (contract unchanged). |
-| Shared cache / sessions (Redis) | TODO | required for stateless multi-instance |
+| Shared rate limiting (Redis) | DONE | API (120/min/IP), auth, leads all Redis-backed when REDIS_URL set; verified vs real Redis 7 |
+| Sessions across instances | DONE | sessions live in storage (Postgres when DATABASE_URL set) so any instance can validate them |
+| WebSocket room coordination across instances | TODO | rooms still in one process's memory — next phase |
 | Object storage for media | TODO | no uploads today |
 | Background workers / queue | TODO | none |
 | Load balancer + health/readiness | PARTIAL | `/api/health` exists; no readiness split, no LB config |

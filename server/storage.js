@@ -103,6 +103,9 @@ function createPostgresStorage(connectionString) {
         connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 8000),
         ...(process.env.PGSSL === 'require' ? {ssl: {rejectUnauthorized: false}} : {}),
       });
+      // An idle pooled client can error (DB restart/failover). Unhandled, that event crashes the process.
+      // The pool discards the broken client; the next query gets a fresh connection.
+      pool.on('error', err => { console.error(JSON.stringify({level: 'error', msg: 'pg pool idle client error', error: err.message})); });
       await pool.query(`CREATE TABLE IF NOT EXISTS app_state (
         id integer PRIMARY KEY DEFAULT 1,
         document jsonb NOT NULL,

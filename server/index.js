@@ -7,11 +7,14 @@ import {fileURLToPath} from 'node:url';
 import {mkdir,appendFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {customerRouter} from './customer.js';
+import {createRateLimiter} from './ratelimit.js';
 import {operationsRouter} from './operations.js';
 import {getAssessment,gradeAssessment,assessText,nextActivity,simulationTurn,reportSession,packs} from './engine.js';
 const app=express();app.set('trust proxy','loopback');const server=createServer(app);const root=join(dirname(fileURLToPath(import.meta.url)),'..');const port=Number(process.env.PORT||4100);
 app.disable('x-powered-by');app.use(express.json({limit:'96kb'}));app.use((req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');res.setHeader('Permissions-Policy','camera=(), geolocation=(), payment=()');res.setHeader('Cross-Origin-Opener-Policy','same-origin');next()});
-const limit=new Map();app.use('/api',(req,res,next)=>{const ip=req.ip||'local',now=Date.now(),v=limit.get(ip)||{n:0,t:now};if(now-v.t>60000){v.n=0;v.t=now}if(++v.n>120)return res.status(429).json({error:'Please slow down and try again.'});limit.set(ip,v);next()});
+// Shared rate limiting (Redis when REDIS_URL is set, otherwise per-process memory). 120 req/min/IP on the API.
+const limiter=createRateLimiter();
+app.use('/api',limiter.middleware({name:'api',limit:Number(process.env.API_RATE_LIMIT_PER_MIN||120),windowMs:60000}));
 const customer=customerRouter();
 app.use('/api',(req,res,next)=>{if(['GET','HEAD','OPTIONS'].includes(req.method))return next();const origin=req.get('origin');if(origin&&origin!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Invalid origin'});next()});
 app.use('/api',customer.router);
@@ -22,12 +25,15 @@ const paid=(tier='essential')=>(req,res,next)=>{if(!customer.enforcementEnabled(
 // Liveness: process is up. Cheap, no dependencies — safe for load-balancer liveness probes.
 app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:!!process.env.OPENAI_API_KEY,paymentConfigured:customer.paymentEnabled(),accessEnforcement:customer.enforcementEnabled(),accessMode:customer.accessMode(),storageBackend:customer.storageBackend(),languagePacks:Object.keys(packs)}));
 // Readiness: storage is reachable. Use this for load-balancer readiness/rolling-deploy gates.
-app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h})}catch(e){res.status(503).json({ready:false,error:'storage unavailable'})}});
-const leadRate=new Map();
+// Readiness = storage reachable. Rate-limit degradation is reported but does not fail readiness
+// (the limiter fails open to per-instance memory so the service stays available).
+app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h,rateLimit:limiter.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status()})}});
+// Lead anti-spam: 5 successfully saved leads per IP per hour (shared across instances when Redis is configured).
+const LEAD_LIMIT=5,LEAD_WINDOW=3600000;
 const todayCairo=()=>{const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}`};
 app.post('/api/leads',async(req,res)=>{
-  const ip=req.ip||'local',now=Date.now(),times=(leadRate.get(ip)||[]).filter(t=>now-t<3600000);
-  if(times.length>=5)return res.status(429).json({error:'طلبات كثيرة من هذا الجهاز. جرّب لاحقًا.'});
+  const ip=req.ip||'local';
+  if(!(await limiter.peek(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW)).allowed)return res.status(429).json({error:'طلبات كثيرة من هذا الجهاز. جرّب لاحقًا.'});
   const b=req.body||{},clean=(v,n)=>String(v||'').trim().slice(0,n);
   const name=clean(b.name,80),email=clean(b.email,120).toLowerCase(),phone=clean(b.phone,25);
   const kind=clean(b.kind,20),language=clean(b.language,20),plan=clean(b.plan,20),term=clean(b.term,20);
@@ -39,7 +45,7 @@ app.post('/api/leads',async(req,res)=>{
   if(kind==='meeting'&&(!/^\d{4}-\d{2}-\d{2}$/.test(preferredDate)||preferredDate<todayCairo()||!['10:00','12:00','15:00','17:00'].includes(preferredTime)))return res.status(400).json({error:'اختار تاريخًا ووقتًا مفضلًا صالحين.'});
   const reference='UL-'+randomUUID().slice(0,8).toUpperCase();
   const lead={reference,createdAt:new Date().toISOString(),name,email,phone,company:clean(b.company,100),kind,language,plan:kind==='subscription'?plan:null,term:kind==='subscription'?term:null,groupSize:kind==='meeting'?Math.min(10000,Math.max(2,Number(b.groupSize)||2)):null,preferredDate:kind==='meeting'?preferredDate:null,preferredTime:kind==='meeting'?preferredTime:null,message:clean(b.message,1500),status:'new'};
-  try{const file=process.env.LEADS_FILE||join(root,'data','leads.jsonl');await mkdir(dirname(file),{recursive:true});await appendFile(file,JSON.stringify(lead)+'\n',{mode:0o600});times.push(now);leadRate.set(ip,times);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
+  try{const file=process.env.LEADS_FILE||join(root,'data','leads.jsonl');await mkdir(dirname(file),{recursive:true});await appendFile(file,JSON.stringify(lead)+'\n',{mode:0o600});await limiter.consume(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
 });
 app.get('/api/assessment',(_req,res)=>res.json({questions:getAssessment()}));
 app.post('/api/assessment',(req,res)=>res.json(gradeAssessment(req.body.answers||{})));
