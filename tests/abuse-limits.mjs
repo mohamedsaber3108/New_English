@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {freePort} from './helpers.mjs';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
@@ -23,7 +24,7 @@ const dir = await mkdtemp(join(tmpdir(), 'usam-abuse-'));
 const procs = [];
 try {
   // --- Single instance: login throttle (10 / 15min / IP) ---
-  const a = await start(dir, 4310 + Math.floor(Math.random() * 50), {REDIS_URL: ''});
+  const a = await start(dir, await freePort(), {REDIS_URL: ''});
   procs.push(a.child);
   const codes = [];
   for (let i = 0; i < 12; i++) codes.push((await post(a.origin, '/api/customer/login', {email: `nobody${i}@example.com`, password: 'wrong-password-xx'})).status);
@@ -39,7 +40,7 @@ try {
   // invalid leads do NOT consume the quota (original semantics preserved) — verified on a fresh instance
   a.child.kill();
 
-  const b = await start(dir, 4370 + Math.floor(Math.random() * 50), {REDIS_URL: ''});
+  const b = await start(dir, await freePort(), {REDIS_URL: ''});
   procs.push(b.child);
   for (let i = 0; i < 7; i++) await post(b.origin, '/api/leads', {name: 'x'});
   ok((await post(b.origin, '/api/leads', lead(99))).status === 201, 'invalid lead submissions do not consume the lead quota');
@@ -48,8 +49,8 @@ try {
   // --- Two instances sharing Redis: limit must be global, not per-instance ---
   if (process.env.REDIS_URL) {
     const tag = Date.now();
-    const i1 = await start(dir, 4430 + Math.floor(Math.random() * 50), {AUTH_IP_LIMIT: '1000'});
-    const i2 = await start(dir, 4490 + Math.floor(Math.random() * 50), {AUTH_IP_LIMIT: '1000'});
+    const i1 = await start(dir, await freePort(), {AUTH_IP_LIMIT: '1000'});
+    const i2 = await start(dir, await freePort(), {AUTH_IP_LIMIT: '1000'});
     procs.push(i1.child, i2.child);
     const email = `target-${tag}@example.com`;
     // per-email limit is 20; alternate instances. AUTH_IP_LIMIT is raised so only the email limit applies.

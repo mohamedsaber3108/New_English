@@ -8,6 +8,7 @@ import {mkdir,appendFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {customerRouter} from './customer.js';
 import {createRateLimiter} from './ratelimit.js';
+import {createRoomHub} from './rooms.js';
 import {operationsRouter} from './operations.js';
 import {getAssessment,gradeAssessment,assessText,nextActivity,simulationTurn,reportSession,packs} from './engine.js';
 const app=express();app.set('trust proxy','loopback');const server=createServer(app);const root=join(dirname(fileURLToPath(import.meta.url)),'..');const port=Number(process.env.PORT||4100);
@@ -27,7 +28,7 @@ app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:!!process.en
 // Readiness: storage is reachable. Use this for load-balancer readiness/rolling-deploy gates.
 // Readiness = storage reachable. Rate-limit degradation is reported but does not fail readiness
 // (the limiter fails open to per-instance memory so the service stays available).
-app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h,rateLimit:limiter.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status()})}});
+app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h,rateLimit:limiter.status(),rooms:hub.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status(),rooms:hub.status()})}});
 // Lead anti-spam: 5 successfully saved leads per IP per hour (shared across instances when Redis is configured).
 const LEAD_LIMIT=5,LEAD_WINDOW=3600000;
 const todayCairo=()=>{const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}`};
@@ -55,6 +56,39 @@ app.post('/api/simulation',paid(),async(req,res)=>{const s=req.body.scenario;if(
 app.post('/api/report',paid(),(req,res)=>{const s=req.body.scenario;if(!s||typeof s.title!=='string')return res.status(400).json({error:'Invalid scenario'});res.json(reportSession(s,Array.isArray(req.body.turns)?req.body.turns.slice(-40):[]))});
 app.post('/api/coach',paid('plus'),async(req,res)=>{if(!process.env.OPENAI_API_KEY)return res.status(503).json({error:'Live AI is not configured on this deployment.'});const messages=Array.isArray(req.body.messages)?req.body.messages.slice(-16).map(m=>({role:m.role==='assistant'?'assistant':'user',content:String(m.content||'').slice(0,1500)})):[];if(!messages.length)return res.status(400).json({error:'Write something to the coach.'});try{const response=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${process.env.OPENAI_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.OPENAI_MODEL||'gpt-4o-mini',temperature:.7,messages:[{role:'system',content:`You are a warm, rigorous English tutor for a learner at ${String(req.body.level||'A2').slice(0,6)}. Respond mainly in English. Adapt to the learner's goal ${String(req.body.goal||'everyday English').slice(0,80)}. Continue natural conversation. Correct only important errors, prefer a hint and self-retry, never invent a proficiency score or claim phoneme-level analysis. Keep responses under 90 words and ask one useful follow-up. If asked for Arabic explanation, give a concise Arabic explanation.`},...messages]})});const data=await response.json();if(!response.ok)throw Error('AI provider unavailable');res.json({reply:data.choices?.[0]?.message?.content||'Could you say that another way?'})}catch{res.status(502).json({error:'The coach is temporarily unavailable.'})}});
 app.use(express.static(join(root,'dist'),{maxAge:'1h'}));app.get('*',(_req,res)=>res.sendFile(join(root,'dist/index.html')));
-const wss=new WebSocketServer({server,path:'/api/rooms'});const rooms=new Map();const send=(ws,obj)=>{if(ws.readyState===1)ws.send(JSON.stringify(obj))};
-wss.on('connection',async(ws,req)=>{if(customer.enforcementEnabled()&&!await customer.hasAccess(req)){ws.close(1008,'Subscription required');return}const u=new URL(req.url,'http://localhost');const code=(u.searchParams.get('code')||'').replace(/[^A-Z0-9]/gi,'').slice(0,8).toUpperCase();const name=(u.searchParams.get('name')||'Learner').slice(0,24);if(code.length<4){ws.close(1008,'Invalid room');return}let room=rooms.get(code)||new Set();if(room.size>=4){ws.close(1008,'Room full');return}rooms.set(code,room);ws.name=name;ws.code=code;room.add(ws);const broadcast=o=>{for(const member of room)send(member,o)};broadcast({type:'members',members:[...room].map(x=>x.name)});ws.on('message',raw=>{if(raw.length>2000)return;let msg;try{msg=JSON.parse(raw)}catch{return}if(msg.type==='message'){const text=String(msg.text||'').trim().slice(0,600);if(!text)return;broadcast({type:'message',name,text,time:Date.now()});if([...room].length>1&&/\b(help|hint)\b/i.test(text))broadcast({type:'coach',text:'Try asking a follow-up question, then give your partner time to answer.'})}});ws.on('close',()=>{room.delete(ws);if(!room.size)rooms.delete(code);else broadcast({type:'members',members:[...room].map(x=>x.name)})})});
-server.listen(port,'0.0.0.0',()=>console.log(`USAM Language listening on ${port}`));
+// Group practice rooms (WebSocket). Coordination is delegated to the room hub: Redis-backed when REDIS_URL is set,
+// so learners connected to different app instances share one room and the 4-person cap holds globally.
+const hub=createRoomHub();
+const wss=new WebSocketServer({server,path:'/api/rooms',maxPayload:4096});
+const safeName=v=>String(v||'').replace(/[\u0000-\u001f<>]/g,'').trim().slice(0,24)||'Learner';
+const ROOM_MSG_LIMIT=20,ROOM_MSG_WINDOW=10000;
+const memberList=async code=>(await hub.members(code)).map(m=>m.name);
+wss.on('connection',async(ws,req)=>{
+  if(customer.enforcementEnabled()&&!await customer.hasAccess(req)){ws.close(1008,'Subscription required');return}
+  const u=new URL(req.url,'http://localhost');
+  const code=(u.searchParams.get('code')||'').replace(/[^A-Z0-9]/gi,'').slice(0,8).toUpperCase();
+  if(code.length<4){ws.close(1008,'Invalid room');return}
+  // Prefer the authenticated account's name; the query parameter is only a fallback for open deployments.
+  let accountName=null;try{const s=customer.currentSession(req,await customer.store());if(s)accountName=s.user.name?.split(/\s+/)[0]}catch{}
+  const name=safeName(accountName||u.searchParams.get('name'));
+  const member={id:randomUUID(),name};
+  const joined=await hub.join(code,member,ws);
+  if(!joined.ok){ws.close(1008,'Room full');return}
+  ws.isAlive=true;ws.on('pong',()=>{ws.isAlive=true});
+  let sent=[];
+  await hub.publish(code,{type:'members',members:await memberList(code)});
+  ws.on('message',async raw=>{
+    const now=Date.now();sent=sent.filter(t=>now-t<ROOM_MSG_WINDOW);
+    if(sent.length>=ROOM_MSG_LIMIT){if(ws.readyState===1)ws.send(JSON.stringify({type:'notice',text:'You are sending messages too quickly. Please wait a moment.'}));return}
+    let msg;try{msg=JSON.parse(raw)}catch{return}
+    if(msg.type!=='message')return;
+    const text=String(msg.text||'').trim().slice(0,600);if(!text)return;
+    sent.push(now);
+    await hub.publish(code,{type:'message',name,text,time:now});
+    if(/\b(help|hint)\b/i.test(text)&&(await hub.members(code)).length>1)await hub.publish(code,{type:'coach',text:'Try asking a follow-up question, then give your partner time to answer.'});
+  });
+  ws.on('close',async()=>{await hub.leave(code,member.id);await hub.publish(code,{type:'members',members:await memberList(code)})});
+});
+// Liveness: terminate sockets that stop answering pings so they release their room seat.
+const roomPing=setInterval(()=>{for(const ws of wss.clients){if(ws.isAlive===false){ws.terminate();continue}ws.isAlive=false;try{ws.ping()}catch{}}},30000);
+wss.on('close',()=>clearInterval(roomPing));server.listen(port,'0.0.0.0',()=>console.log(`USAM Language listening on ${port}`));

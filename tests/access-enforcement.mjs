@@ -5,12 +5,12 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {freePort} from './helpers.mjs';
 
 const admin='a'.repeat(40);
 
 function startServer(extraEnv){
-  return mkdtemp(join(tmpdir(),'usam-access-')).then(dir=>{
-    const port=4200+Math.floor(Math.random()*300);
+  return Promise.all([mkdtemp(join(tmpdir(),'usam-access-')),freePort()]).then(([dir,port])=>{
     const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),CUSTOMER_DB_FILE:join(dir,'customers.json'),LEADS_FILE:join(dir,'leads.jsonl'),ADMIN_ACCESS_TOKEN:admin,NODE_ENV:'test',RATE_LIMIT_PREFIX:'t'+Date.now()+Math.random().toString(36).slice(2,8),...extraEnv},stdio:['ignore','pipe','pipe']});
     return {dir,port,child,origin:`http://127.0.0.1:${port}`};
   });

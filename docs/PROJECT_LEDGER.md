@@ -81,7 +81,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Pronunciation | PARTIAL | browser Web Speech transcript compare; no phoneme scoring |
 | Interactive stories | PARTIAL | one 3-step story |
 | Spaced repetition / review | DONE | SM-2 engine `server/scheduler.js`, 35 unit tests, shared client+server; FSRS upgrade path documented in module |
-| Group voice rooms | PARTIAL | in-memory text WebSocket, max 4, no voice/moderation/persistence |
+| Group rooms | PARTIAL | text rooms now multi-instance + flood-limited + identity-safe (tested). Still missing: voice (needs WebRTC/LiveKit infra), moderation/reporting, session reports |
 | Gamification (XP/streak) | DONE | client-side; persisted to profile |
 | Progress analytics | PARTIAL | session list + skill estimates; no deep analytics |
 
@@ -102,7 +102,8 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Storage | DONE (document model) | `server/storage.js` adapter: JSON (default) or PostgreSQL via DATABASE_URL. PG uses row-locked txns, pooling, survives restart, shared across instances. Verified by `tests/storage.pg.test.mjs` + full app smoke/access run against real PG 16 (Docker). NEXT: normalized per-entity tables for write-concurrency at the top of the 100k range (contract unchanged). |
 | Shared rate limiting (Redis) | DONE | API (120/min/IP), auth, leads all Redis-backed when REDIS_URL set; verified vs real Redis 7 |
 | Sessions across instances | DONE | sessions live in storage (Postgres when DATABASE_URL set) so any instance can validate them |
-| WebSocket room coordination across instances | TODO | rooms still in one process's memory — next phase |
+| WebSocket room coordination across instances | DONE | `server/rooms.js`: Redis hash membership + atomic Lua join (4-cap holds globally), pub/sub fan-out, heartbeats prune crashed-instance ghosts; memory fallback. Proven by `tests/rooms.test.mjs` (2 instances: cross-instance message + global cap) |
+| Room safety | DONE | account name overrides spoofable query name; 20 msgs/10s per connection; ping/pong drops dead sockets; 4KB max payload; entitlement enforced on connect |
 | Object storage for media | TODO | no uploads today |
 | Background workers / queue | TODO | none |
 | Load balancer + health/readiness | PARTIAL | `/api/health` exists; no readiness split, no LB config |
