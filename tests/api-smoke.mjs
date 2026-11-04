@@ -2,9 +2,8 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createServer} from 'node:net';
-// Ask the OS for a free port so an orphaned server from an interrupted run can never collide with this one.
-const freePort=()=>new Promise((res,rej)=>{const s=createServer();s.unref();s.on('error',rej);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>res(p))})});
+// helpers: OS-assigned free port + strips provider secrets so tests never call real, billed providers.
+import {freePort} from './helpers.mjs';
 const dir=await mkdtemp(join(tmpdir(),'usam-language-')),port=await freePort(),origin=`http://127.0.0.1:${port}`,admin='a'.repeat(40);
 const child=spawn(process.execPath,['server/index.js'],{env:{...process.env,PORT:String(port),CUSTOMER_DB_FILE:join(dir,'customers.json'),LEADS_FILE:join(dir,'leads.jsonl'),ADMIN_ACCESS_TOKEN:admin,NODE_ENV:'test',RATE_LIMIT_PREFIX:'t'+Date.now()+Math.random().toString(36).slice(2,8)},stdio:['ignore','pipe','pipe']});
 let cookie='';const call=async(path,{method='GET',body,auth}={})=>{const r=await fetch(origin+path,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...(cookie?{Cookie:cookie}:{}),...(auth?{Authorization:`Bearer ${auth}`}:{})},body:body?JSON.stringify(body):undefined});const set=r.headers.get('set-cookie');if(set)cookie=set.split(';')[0];let data={};try{data=await r.json()}catch{}return {r,data}};

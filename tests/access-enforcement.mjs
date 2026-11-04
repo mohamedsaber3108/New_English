@@ -40,6 +40,7 @@ const assert=(cond,msg)=>{if(cond){console.log('  PASS:',msg)}else{console.error
     const health=await (await fetch(s.origin+'/api/health')).json();
     assert(health.accessEnforcement===true,'default deployment enforces access (fail closed)');
     assert(health.paymentConfigured===false,'payment is not configured in this test');
+    assert(health.coachConfigured===false,'test servers never inherit a real AI provider key from the developer machine');
     const status=await callFeedback(s.origin);
     assert(status===401||status===402,`anonymous paid request is blocked by default (got ${status})`);
   }finally{await stop(s)}
