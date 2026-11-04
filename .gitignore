@@ -6,3 +6,6 @@ data/
 coverage/
 *.tmp
 .DS_Store
+
+# raw load-test output (commit only results cited in docs/LOAD_TEST_RESULTS.md, with git add -f)
+tests/load/results/*.json
