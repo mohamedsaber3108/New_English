@@ -89,6 +89,7 @@ function createPostgresStorage(connectionString) {
   let pool;
   let ready;
   let cache;
+  let cacheVersion = -1; // version of the document held in `cache`
   let writes = Promise.resolve();
 
   async function init() {
@@ -112,6 +113,9 @@ function createPostgresStorage(connectionString) {
         updated_at timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT app_state_singleton CHECK (id = 1)
       )`);
+      // Monotonic version, bumped on every write. Lets each instance detect writes made by OTHER instances
+      // with a cheap single-column read instead of trusting a stale in-process cache.
+      await pool.query('ALTER TABLE app_state ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 0');
       await pool.query(
         `INSERT INTO app_state (id, document) VALUES (1, $1::jsonb) ON CONFLICT (id) DO NOTHING`,
         [JSON.stringify(emptyDocument())]
@@ -122,9 +126,13 @@ function createPostgresStorage(connectionString) {
 
   async function store() {
     await init();
-    if (!cache) {
-      const res = await pool.query('SELECT document FROM app_state WHERE id = 1');
+    // Cheap freshness check every read; refetch the document only when another instance has written.
+    const v = await pool.query('SELECT version FROM app_state WHERE id = 1');
+    const current = Number(v.rows[0]?.version ?? 0);
+    if (!cache || current !== cacheVersion) {
+      const res = await pool.query('SELECT document, version FROM app_state WHERE id = 1');
       cache = ensureCollections(res.rows[0]?.document || emptyDocument());
+      cacheVersion = Number(res.rows[0]?.version ?? 0);
     }
     return cache;
   }
@@ -139,9 +147,10 @@ function createPostgresStorage(connectionString) {
         const res = await client.query('SELECT document FROM app_state WHERE id = 1 FOR UPDATE');
         const db = ensureCollections(res.rows[0]?.document || emptyDocument());
         const out = await fn(db);
-        await client.query('UPDATE app_state SET document = $1::jsonb, updated_at = now() WHERE id = 1', [JSON.stringify(db)]);
+        const up = await client.query('UPDATE app_state SET document = $1::jsonb, updated_at = now(), version = version + 1 WHERE id = 1 RETURNING version', [JSON.stringify(db)]);
         await client.query('COMMIT');
         cache = db; // refresh cache with the committed document
+        cacheVersion = Number(up.rows[0].version);
         return out;
       } catch (e) {
         try { await client.query('ROLLBACK'); } catch {}

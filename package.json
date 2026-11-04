@@ -17,7 +17,7 @@
     "test:pg": "node tests/storage.pg.test.mjs",
     "test:rooms": "node tests/rooms.test.mjs",
     "test:ratelimit": "node tests/ratelimit.test.mjs && node tests/abuse-limits.mjs",
-    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/storage.pg.test.mjs"
+    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/storage.pg.test.mjs && node tests/multi-instance.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.7.0",

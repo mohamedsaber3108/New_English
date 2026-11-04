@@ -38,6 +38,17 @@ async function reset(storage) {
   const doc2 = await second.store();
   ok(doc2.users.length === 1 && doc2.users[0].id === 'u1', 'data persists across a fresh storage instance (survives restart / shared across instances)');
 
+  // Cross-instance freshness: instance A has already cached the document; instance B then writes.
+  // A's next store() must see B's write (otherwise sessions created on B are invisible on A).
+  {
+    const A = createStorage({databaseUrl: url}), B = createStorage({databaseUrl: url});
+    await A.store(); // warm A's cache
+    await B.mutate(db => { db.sessions.push({id: 'fresh-from-B', hash: 'h', userId: 'u1', expires: Date.now() + 60000}); });
+    const seen = (await A.store()).sessions.some(s => s.id === 'fresh-from-B');
+    ok(seen, 'a write on instance B is visible to instance A on its next read (no stale cache)');
+    await A.close(); await B.close();
+  }
+
   // Concurrency: 25 parallel mutates must all land (row-locked transactions, no lost updates).
   await reset(storage);
   await Promise.all(Array.from({length: 25}, (_, i) => storage.mutate(db => { db.orders.push({reference: 'R' + i}); })));
