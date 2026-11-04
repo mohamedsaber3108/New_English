@@ -1,6 +1,6 @@
 # Data Layer Migration Plan (single document -> relational tables)
 
-Status: IN PROGRESS. Driver: `docs/LOAD_TEST_RESULTS.md` Baseline 1 (document model fails before 50k learners).
+Status: steps 1-9 DONE (commit after 158e827); step 10 (load-test Baseline 2) next. Driver: `docs/LOAD_TEST_RESULTS.md` Baseline 1 (document model fails before 50k learners).
 
 ## Decision
 
@@ -47,11 +47,11 @@ inside the caller's transaction. Retention default: keep all (table); `AUDIT_MAX
 
 1. [x] schema + db/index.js + migrations + tests (migration idempotency, concurrency, constraints)
 2. [x] repo.js + unit tests on PGlite
-3. [ ] customer.js on repo (auth, sessions, profile, orders, webhook, account deletion)
-4. [ ] operations.js on repo (tokens, preferences, sessions, support, receipts, analytics)
-5. [ ] admin.js on repo (SQL search/filter/pagination/aggregates)
-6. [ ] index.js (leads, WS session lookup, health/ready), scripts
+3. [x] customer.js on repo (auth, sessions, profile, orders, webhook, account deletion)
+4. [x] operations.js on repo (tokens, preferences, sessions, support, receipts, analytics)
+5. [x] admin.js on repo (SQL search/filter/pagination/aggregates)
+6. [x] index.js (leads, WS session lookup, health/ready), scripts
 7. [x] legacy import + test (JSON doc and app_state)
-8. [ ] port tests that touched the document directly (tamper test, MFA sealed-secret check, storage tests)
-9. [ ] full regression default (PGlite) + PG16 + Redis, E2E, builds
+8. [x] port tests that touched the document directly (tamper test, MFA sealed-secret check, storage tests)
+9. [x] full regression default (PGlite) + PG16 + Redis, E2E, builds
 10. [ ] load test Baseline 2, docs, ledger

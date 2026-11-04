@@ -1,12 +1,12 @@
 // Administration: individual admin accounts, role-based access control, admin sessions and operations APIs.
 //
 // Security model
-//  - Admins are separate from learners (own collection, own cookie, own sessions). A learner session can never
+//  - Admins are separate from learners (own table, own cookie, own sessions). A learner session can never
 //    reach /api/admin, and an admin session is never sent to learner endpoints (cookie Path=/api/admin).
 //  - Cookie: HttpOnly; SameSite=Strict; Secure in production. Absolute lifetime ADMIN_SESSION_MS (8h),
 //    idle timeout ADMIN_IDLE_MS (30 min). Session tokens are stored only as SHA-256 hashes.
 //  - Every route declares the permission it needs; roles map to permission sets (see ROLES).
-//  - Every state-changing action is recorded in the tamper-evident audit chain inside the same storage
+//  - Every state-changing action is recorded in the tamper-evident audit chain inside the same database
 //    transaction as the change itself. Sensitive actions require a written reason.
 //  - CSRF: SameSite=Strict cookie + the app-wide Origin check on non-GET requests.
 //  - Legacy shared token (ADMIN_ACCESS_TOKEN) is DISABLED by default. ADMIN_LEGACY_TOKEN=true re-enables it
@@ -14,9 +14,9 @@
 import express from 'express';
 import {readFile} from 'node:fs/promises';
 import {randomBytes, randomUUID, createHash, timingSafeEqual} from 'node:crypto';
-import {appendAudit, verifyAudit} from './audit.js';
 import {passwordHash, checkPassword, dummyCheck, validPassword} from './passwords.js';
 import {newSecret, verifyTotp, otpauthUri, sealSecret, openSecret, base32Encode} from './totp.js';
+import {isUniqueViolation} from './db/index.js';
 
 export const PERMISSIONS = {
   'dashboard.read': 'View the operations overview and integration status',
@@ -73,19 +73,16 @@ export async function buildAdmin({email, name, role, password, createdBy = null}
   return {id: randomUUID(), email, name, role, status: 'active', password: await passwordHash(password), createdAt: nowIso(), createdBy};
 }
 
-function pageOf(req, items) {
-  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-  const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 25));
-  const total = items.length;
-  return {items: items.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, pages: Math.max(1, Math.ceil(total / pageSize))};
-}
-const needle = req => clean(req.query.q, 100).toLowerCase();
-const hit = (n, ...fields) => !n || fields.some(f => String(f ?? '').toLowerCase().includes(n));
-const newest = (a, b) => String(b.createdAt || b.at || '').localeCompare(String(a.createdAt || a.at || ''));
+const needle = req => clean(req.query.q, 100);
+const paging = req => ({page: req.query.page, pageSize: req.query.pageSize});
 const reasonOf = req => { const r = clean(req.body?.reason, 500); if (r.length < 5) throw Object.assign(Error('A reason of at least 5 characters is required for this action.'), {status: 400}); return r; };
+const httpError = (status, error) => Object.assign(Error(error), {status});
 
-export function adminRouter(customer, {root, leadsFile, integrations = () => ({})} = {}) {
+export function adminRouter(customer, {leadsFile, integrations = () => ({})} = {}) {
   const router = express.Router();
+  const {repo} = customer;
+  const db = () => customer.db();
+  const audit = (q, input) => repo.audit.append(q, input);
   const actorOf = req => req.admin.legacy ? {type: 'legacy-token'} : {type: 'admin', id: req.admin.id, role: req.admin.role};
   const fail = (res, e) => res.status(e.status || 500).json({error: e.status ? e.message : 'Unexpected server error.'});
 
@@ -93,29 +90,21 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     const raw = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
     return raw && /^[a-f0-9]{64}$/.test(raw) ? raw : null;
   }
-  function currentAdmin(req, db) {
+  // Only fully authenticated sessions grant access. An MFA challenge session (stage 'mfa') never does.
+  async function currentAdmin(req, q) {
     const raw = readCookie(req);
     if (!raw) return null;
-    const h = sha(raw), now = Date.now();
-    // Only fully authenticated sessions grant access. An MFA challenge session (stage 'mfa') never does.
-    const session = db.adminSessions.find(s => s.hash === h && (s.stage || 'full') === 'full' && s.expires > now && s.lastSeen > now - idleMs());
-    if (!session) return null;
-    const admin = db.admins.find(a => a.id === session.adminId && a.status === 'active');
-    return admin ? {admin, session} : null;
+    const now = Date.now(), s = await repo.adminSessions.byHash(q, sha(raw));
+    if (!s || s.stage !== 'full' || s.expires <= now || s.lastSeen <= now - idleMs()) return null;
+    const admin = await repo.admins.byId(q, s.adminId);
+    return admin?.status === 'active' ? {admin, session: s} : null;
   }
-  function currentChallenge(req, db) {
-    const raw = readCookie(req);
-    if (!raw) return null;
-    const session = db.adminSessions.find(s => s.hash === sha(raw) && s.stage === 'mfa' && s.expires > Date.now());
-    const admin = session && db.admins.find(a => a.id === session.adminId && a.status === 'active');
-    return admin ? {admin, session} : null;
-  }
-  // Creates a full session (fresh token) and sets the cookie. Must run inside mutate().
-  function issueFullSession(db, req, admin, now) {
+  // Creates a full session under a fresh token. Runs inside the caller's transaction.
+  async function issueFullSession(q, req, admin, now) {
     const token = randomBytes(32).toString('hex');
-    db.adminSessions = db.adminSessions.filter(s => s.expires > now && ((s.stage || 'full') === 'mfa' || s.lastSeen > now - idleMs()));
-    db.adminSessions.push({id: randomUUID(), hash: sha(token), adminId: admin.id, stage: 'full', createdAt: now, lastSeen: now, expires: now + sessionMs(), device: clean(req.get('user-agent') || 'Browser', 120)});
-    const a = db.admins.find(x => x.id === admin.id); if (a) a.lastLoginAt = nowIso();
+    await repo.adminSessions.purge(q, now, idleMs());
+    await repo.adminSessions.create(q, {id: randomUUID(), hash: sha(token), adminId: admin.id, stage: 'full', createdAt: now, lastSeen: now, expires: now + sessionMs(), device: clean(req.get('user-agent') || 'Browser', 120)});
+    await repo.admins.update(q, admin.id, {lastLoginAt: nowIso()});
     return token;
   }
   const sessionPayload = admin => ({admin: publicAdmin(admin), permissions: ROLES[admin.role].permissions, mfaEnrollmentRequired: mfaRequired() && !admin.mfa?.enabled});
@@ -135,21 +124,19 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       if (bearer && process.env.ADMIN_LEGACY_TOKEN === 'true' && legacyToken.length >= 32 && same(bearer, legacyToken)) {
         if (req.method !== 'GET' || !can('viewer', perm)) return res.status(403).json({error: 'The legacy token is read-only. Sign in with an administrator account.'});
         req.admin = {id: 'legacy-token', name: 'Legacy token', role: 'viewer', legacy: true};
-        await customer.mutate(db => { appendAudit(db, {event: 'admin_legacy_token_used', actor: {type: 'legacy-token'}, meta: {path: req.path}}); });
+        await (await db()).tx(q => audit(q, {event: 'admin_legacy_token_used', actor: {type: 'legacy-token'}, meta: {path: req.path}}));
         return next();
       }
-      const db = await customer.store();
-      const found = currentAdmin(req, db);
+      const d = await db();
+      const found = await currentAdmin(req, d);
       if (!found) return res.status(401).json({error: 'Administrator sign-in required.'});
       if (mfaRequired() && !found.admin.mfa?.enabled && !allowUnenrolled) return res.status(403).json({error: 'Two-factor authentication must be enabled before using the console.', mfaEnrollmentRequired: true});
       if (perm && !can(found.admin.role, perm)) {
-        await customer.mutate(d => { appendAudit(d, {event: 'admin_permission_denied', actor: {type: 'admin', id: found.admin.id, role: found.admin.role}, meta: {permission: perm, method: req.method, path: req.path}}); });
+        await d.tx(q => audit(q, {event: 'admin_permission_denied', actor: {type: 'admin', id: found.admin.id, role: found.admin.role}, meta: {permission: perm, method: req.method, path: req.path}}));
         return res.status(403).json({error: 'Your role does not allow this action.'});
       }
       req.admin = found.admin; req.adminSession = found.session;
-      if (Date.now() - found.session.lastSeen > 60000) {
-        await customer.mutate(d => { const s = d.adminSessions.find(x => x.id === found.session.id); if (s) s.lastSeen = Date.now(); });
-      }
+      if (Date.now() - found.session.lastSeen > 60000) await repo.adminSessions.touch(d, found.session.id, Date.now());
       next();
     } catch (e) { fail(res, e); }
   };
@@ -158,28 +145,28 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
   router.post('/admin/auth/login', customer.throttle, async (req, res) => {
     const email = clean(req.body?.email, 120).toLowerCase(), password = String(req.body?.password || '');
     try {
-      const admin = (await customer.store()).admins.find(a => a.email === email);
+      const d = await db();
+      const admin = await repo.admins.byEmail(d, email);
       const valid = admin ? await checkPassword(password, admin.password) : await dummyCheck(password);
       if (!admin || !valid || admin.status !== 'active') {
-        await customer.mutate(db => { appendAudit(db, {event: 'admin_login_failed', actor: admin ? {type: 'admin', id: admin.id} : null, meta: {emailHash: sha(email).slice(0, 16), reason: !admin ? 'unknown' : !valid ? 'password' : 'disabled'}}); });
+        await d.tx(q => audit(q, {event: 'admin_login_failed', actor: admin ? {type: 'admin', id: admin.id} : null, meta: {emailHash: sha(email).slice(0, 16), reason: !admin ? 'unknown' : !valid ? 'password' : 'disabled'}}));
         return res.status(401).json({error: 'Incorrect email or password.'});
       }
       const now = Date.now();
       if (admin.mfa?.enabled) {
         // Password is correct but MFA is on: issue a short-lived challenge session that grants nothing.
         const challenge = randomBytes(32).toString('hex');
-        await customer.mutate(db => {
-          db.adminSessions = db.adminSessions.filter(s => s.expires > now);
-          db.adminSessions.push({id: randomUUID(), hash: sha(challenge), adminId: admin.id, stage: 'mfa', attempts: 0, createdAt: now, lastSeen: now, expires: now + CHALLENGE_MS});
-          appendAudit(db, {event: 'admin_login_mfa_challenge', actor: {type: 'admin', id: admin.id}});
+        await d.tx(async q => {
+          await repo.adminSessions.create(q, {id: randomUUID(), hash: sha(challenge), adminId: admin.id, stage: 'mfa', attempts: 0, createdAt: now, lastSeen: now, expires: now + CHALLENGE_MS});
+          await audit(q, {event: 'admin_login_mfa_challenge', actor: {type: 'admin', id: admin.id}});
         });
         setCookie(req, res, challenge, CHALLENGE_MS);
         return res.json({mfaRequired: true});
       }
-      let token;
-      await customer.mutate(db => {
-        token = issueFullSession(db, req, admin, now);
-        appendAudit(db, {event: 'admin_login', actor: {type: 'admin', id: admin.id, role: admin.role}, meta: {mfa: 'none'}});
+      const token = await d.tx(async q => {
+        const t = await issueFullSession(q, req, admin, now);
+        await audit(q, {event: 'admin_login', actor: {type: 'admin', id: admin.id, role: admin.role}, meta: {mfa: 'none'}});
+        return t;
       });
       setCookie(req, res, token, sessionMs());
       res.json(sessionPayload(admin));
@@ -192,32 +179,32 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     try {
       const code = String(req.body?.code || ''), recovery = String(req.body?.recoveryCode || '');
       if (!mfaKey()) throw mfaUnavailable();
-      let outcome;
-      await customer.mutate(db => {
-        const ch = currentChallenge(req, db);
-        if (!ch) { outcome = {status: 401, error: 'Sign-in expired. Enter your email and password again.'}; return; }
-        const s = db.adminSessions.find(x => x.id === ch.session.id), a = db.admins.find(x => x.id === ch.admin.id);
-        s.attempts = (s.attempts || 0) + 1;
-        let method = null;
+      const raw = readCookie(req);
+      const outcome = await (await db()).tx(async q => {
+        const s = raw && await repo.adminSessions.byHash(q, sha(raw), {lock: true});
+        const a = s && s.stage === 'mfa' && s.expires > Date.now() && await repo.admins.byId(q, s.adminId, {lock: true});
+        if (!a || a.status !== 'active' || !a.mfa?.enabled) return {status: 401, error: 'Sign-in expired. Enter your email and password again.'};
+        const attempts = (s.attempts || 0) + 1;
+        let method = null, mfa = a.mfa;
         if (recovery) {
-          const h = recoveryHash(recovery), rc = (a.mfa.recovery || []).find(r => r.hash === h && !r.usedAt);
-          if (rc) { rc.usedAt = nowIso(); method = 'recovery'; }
+          const h = recoveryHash(recovery), rc = (mfa.recovery || []).find(r => r.hash === h && !r.usedAt);
+          if (rc) { mfa = {...mfa, recovery: mfa.recovery.map(r => r === rc ? {...r, usedAt: nowIso()} : r)}; method = 'recovery'; }
         } else {
-          const v = verifyTotp(openSecret(a.mfa.secret, mfaKey()), code, {lastStep: a.mfa.lastStep ?? -1});
-          if (v.ok) { a.mfa.lastStep = v.step; method = 'totp'; }
+          const v = verifyTotp(openSecret(mfa.secret, mfaKey()), code, {lastStep: mfa.lastStep ?? -1});
+          if (v.ok) { mfa = {...mfa, lastStep: v.step}; method = 'totp'; }
         }
         if (!method) {
-          const exhausted = s.attempts >= CHALLENGE_ATTEMPTS;
-          if (exhausted) db.adminSessions = db.adminSessions.filter(x => x.id !== s.id);
-          appendAudit(db, {event: 'admin_mfa_failed', actor: {type: 'admin', id: a.id}, meta: {attempt: s.attempts, exhausted, kind: recovery ? 'recovery' : 'totp'}});
-          outcome = {status: 401, error: exhausted ? 'Too many incorrect codes. Sign in again.' : 'Incorrect code.', restart: exhausted};
-          return;
+          const exhausted = attempts >= CHALLENGE_ATTEMPTS;
+          if (exhausted) await repo.adminSessions.remove(q, s.id); else await repo.adminSessions.setAttempts(q, s.id, attempts);
+          await audit(q, {event: 'admin_mfa_failed', actor: {type: 'admin', id: a.id}, meta: {attempt: attempts, exhausted, kind: recovery ? 'recovery' : 'totp'}});
+          return {status: 401, error: exhausted ? 'Too many incorrect codes. Sign in again.' : 'Incorrect code.', restart: exhausted};
         }
-        db.adminSessions = db.adminSessions.filter(x => x.id !== s.id);
-        const token = issueFullSession(db, req, a, Date.now());
-        const left = (a.mfa.recovery || []).filter(r => !r.usedAt).length;
-        appendAudit(db, {event: 'admin_login', actor: {type: 'admin', id: a.id, role: a.role}, meta: {mfa: method, ...(method === 'recovery' ? {recoveryCodesLeft: left} : {})}});
-        outcome = {status: 200, token, admin: a, left, method};
+        await repo.admins.update(q, a.id, {mfa});
+        await repo.adminSessions.remove(q, s.id);
+        const token = await issueFullSession(q, req, a, Date.now());
+        const left = (mfa.recovery || []).filter(r => !r.usedAt).length;
+        await audit(q, {event: 'admin_login', actor: {type: 'admin', id: a.id, role: a.role}, meta: {mfa: method, ...(method === 'recovery' ? {recoveryCodesLeft: left} : {})}});
+        return {status: 200, token, admin: {...a, mfa}, left, method};
       });
       if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error, restart: !!outcome.restart});
       setCookie(req, res, outcome.token, sessionMs());
@@ -232,7 +219,7 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       if (!mfaKey()) throw mfaUnavailable();
       if (req.admin.mfa?.enabled) return res.status(409).json({error: 'Two-factor authentication is already enabled.'});
       const secret = newSecret();
-      await customer.mutate(db => { const a = db.admins.find(x => x.id === req.admin.id); a.mfa = {enabled: false, pending: sealSecret(secret, mfaKey()), pendingAt: Date.now()}; });
+      await repo.admins.update(await db(), req.admin.id, {mfa: {enabled: false, pending: sealSecret(secret, mfaKey()), pendingAt: Date.now()}});
       // The secret is shown once so the admin can add it to an authenticator app; only the sealed form is stored.
       res.json({secret, otpauthUri: otpauthUri({secret, account: req.admin.email})});
     } catch (e) { fail(res, e); }
@@ -240,20 +227,18 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
   router.post('/admin/mfa/enable', requireAdmin(null, {allowUnenrolled: true}), async (req, res) => {
     try {
       if (!mfaKey()) throw mfaUnavailable();
-      let outcome;
       const codes = Array.from({length: RECOVERY_CODES}, newRecoveryCode);
-      await customer.mutate(db => {
-        const a = db.admins.find(x => x.id === req.admin.id);
-        if (a.mfa?.enabled) { outcome = {status: 409, error: 'Two-factor authentication is already enabled.'}; return; }
-        if (!a.mfa?.pending || Date.now() - a.mfa.pendingAt > 15 * 60 * 1000) { outcome = {status: 409, error: 'Start setup again (the setup key expired after 15 minutes).'}; return; }
-        const secret = openSecret(a.mfa.pending, mfaKey());
-        const v = verifyTotp(secret, req.body?.code);
-        if (!v.ok) { outcome = {status: 400, error: 'Incorrect code. Check the time on your phone and try again.'}; return; }
-        a.mfa = {enabled: true, secret: a.mfa.pending, enabledAt: nowIso(), lastStep: v.step, recovery: codes.map(c => ({hash: recoveryHash(c)}))};
+      const outcome = await (await db()).tx(async q => {
+        const a = await repo.admins.byId(q, req.admin.id, {lock: true});
+        if (a.mfa?.enabled) return {status: 409, error: 'Two-factor authentication is already enabled.'};
+        if (!a.mfa?.pending || Date.now() - a.mfa.pendingAt > 15 * 60 * 1000) return {status: 409, error: 'Start setup again (the setup key expired after 15 minutes).'};
+        const v = verifyTotp(openSecret(a.mfa.pending, mfaKey()), req.body?.code);
+        if (!v.ok) return {status: 400, error: 'Incorrect code. Check the time on your phone and try again.'};
+        await repo.admins.update(q, a.id, {mfa: {enabled: true, secret: a.mfa.pending, enabledAt: nowIso(), lastStep: v.step, recovery: codes.map(c => ({hash: recoveryHash(c)}))}});
         // Other sessions were authenticated without MFA: end them, keep the current one.
-        db.adminSessions = db.adminSessions.filter(s => s.adminId !== a.id || s.id === req.adminSession.id);
-        appendAudit(db, {event: 'admin_mfa_enabled', actor: {type: 'admin', id: a.id, role: a.role}});
-        outcome = {status: 200};
+        await repo.adminSessions.removeForAdmin(q, a.id, req.adminSession.id);
+        await audit(q, {event: 'admin_mfa_enabled', actor: {type: 'admin', id: a.id, role: a.role}});
+        return {status: 200};
       });
       if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
       res.json({ok: true, recoveryCodes: codes, message: 'Two-factor authentication is on. Store these recovery codes somewhere safe; each works once and they are not shown again.'});
@@ -264,13 +249,13 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       if (!mfaKey()) throw mfaUnavailable();
       if (!req.admin.mfa?.enabled) return res.status(409).json({error: 'Two-factor authentication is not enabled.'});
       if (!await checkPassword(String(req.body?.password || ''), req.admin.password)) return res.status(403).json({error: 'Password is incorrect.'});
-      let ok = false;
-      await customer.mutate(db => {
-        const a = db.admins.find(x => x.id === req.admin.id);
+      const ok = await (await db()).tx(async q => {
+        const a = await repo.admins.byId(q, req.admin.id, {lock: true});
         const v = verifyTotp(openSecret(a.mfa.secret, mfaKey()), req.body?.code, {lastStep: a.mfa.lastStep ?? -1});
-        if (!v.ok) return;
-        delete a.mfa; ok = true;
-        appendAudit(db, {event: 'admin_mfa_disabled', actor: {type: 'admin', id: a.id, role: a.role}});
+        if (!v.ok) return false;
+        await repo.admins.update(q, a.id, {mfa: null});
+        await audit(q, {event: 'admin_mfa_disabled', actor: {type: 'admin', id: a.id, role: a.role}});
+        return true;
       });
       if (!ok) return res.status(400).json({error: 'Incorrect code.'});
       res.json({ok: true, mfaEnrollmentRequired: mfaRequired()});
@@ -278,12 +263,10 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
   });
 
   router.post('/admin/auth/logout', async (req, res) => {
-    const raw = readCookie(req);
-    if (raw) await customer.mutate(db => {
-      const s = db.adminSessions.find(x => x.hash === sha(raw));
-      db.adminSessions = db.adminSessions.filter(x => x.hash !== sha(raw));
-      if (s) appendAudit(db, {event: 'admin_logout', actor: {type: 'admin', id: s.adminId}});
-    });
+    try {
+      const raw = readCookie(req);
+      if (raw) await (await db()).tx(async q => { const s = await repo.adminSessions.removeByHash(q, sha(raw)); if (s) await audit(q, {event: 'admin_logout', actor: {type: 'admin', id: s.adminId}}); });
+    } catch {}
     setCookie(req, res, '', 0);
     res.json({ok: true});
   });
@@ -300,10 +283,10 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       if (!await checkPassword(current, req.admin.password)) return res.status(403).json({error: 'Current password is incorrect.'});
       if (!validPassword(next) || next === current) return res.status(400).json({error: 'New password must be 12-128 characters and different from the current one.'});
       const digest = await passwordHash(next);
-      await customer.mutate(db => {
-        const a = db.admins.find(x => x.id === req.admin.id); if (a) a.password = digest;
-        db.adminSessions = db.adminSessions.filter(s => s.adminId !== req.admin.id || s.id === req.adminSession.id);
-        appendAudit(db, {event: 'admin_password_changed', actor: actorOf(req)});
+      await (await db()).tx(async q => {
+        await repo.admins.update(q, req.admin.id, {password: digest});
+        await repo.adminSessions.removeForAdmin(q, req.admin.id, req.adminSession.id);
+        await audit(q, {event: 'admin_password_changed', actor: actorOf(req)});
       });
       res.json({ok: true, message: 'Password changed. Other administrator sessions were signed out.'});
     } catch (e) { fail(res, e); }
@@ -311,20 +294,7 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
 
   // ---------------- Overview ----------------
   router.get('/admin/overview', requireAdmin('dashboard.read'), async (_req, res) => {
-    const db = await customer.store(), now = Date.now();
-    res.json({
-      users: db.users.length,
-      suspended: db.users.filter(u => u.status === 'suspended').length,
-      verified: db.users.filter(u => u.emailVerified).length,
-      activeEntitlements: db.users.reduce((n, u) => n + Object.values(u.entitlements || {}).filter(e => e.expiresAt > now).length, 0),
-      paidOrders: db.orders.filter(o => o.status === 'paid').length,
-      pendingOrders: db.orders.filter(o => ['pending_contact', 'pending_payment'].includes(o.status)).length,
-      refundedOrders: db.orders.filter(o => o.status === 'refunded').length,
-      revenuePaidEGP: db.orders.filter(o => o.status === 'paid').reduce((n, o) => n + (Number(o.amount) || 0), 0),
-      openTickets: db.supportTickets.filter(t => ['open', 'in_progress'].includes(t.status)).length,
-      newLeads: db.leads.filter(l => (l.status || 'new') === 'new').length,
-      integrations: integrations(),
-    });
+    try { res.json({...await repo.overview(await db()), integrations: integrations()}); } catch (e) { fail(res, e); }
   });
 
   // ---------------- Users ----------------
@@ -333,251 +303,210 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     return {id: u.id, name: u.name, email: u.email, phone: u.phone, createdAt: u.createdAt, emailVerified: !!u.emailVerified, status: u.status || 'active', subscription: e ? {plan: e.plan, expiresAt: e.expiresAt, active: e.expiresAt > now, source: e.source || 'payment'} : null, hasProfile: !!u.profile};
   };
   router.get('/admin/users', requireAdmin('users.read'), async (req, res) => {
-    const db = await customer.store(), n = needle(req), now = Date.now();
-    const status = clean(req.query.status, 20), sub = clean(req.query.subscription, 20), verified = clean(req.query.verified, 5);
-    const rows = db.users.map(u => userRow(u, now)).filter(u => hit(n, u.name, u.email, u.phone, u.id)
-      && (!status || u.status === status)
-      && (!verified || String(u.emailVerified) === verified)
-      && (!sub || (sub === 'active' ? u.subscription?.active : !u.subscription?.active))).sort(newest);
-    res.json(pageOf(req, rows));
+    try {
+      const r = await repo.users.list(await db(), {needle: needle(req), status: clean(req.query.status, 20), verified: clean(req.query.verified, 5), subscription: clean(req.query.subscription, 20), ...paging(req)});
+      res.json({...r, items: r.items.map(u => userRow(u))});
+    } catch (e) { fail(res, e); }
   });
   router.get('/admin/users/:id', requireAdmin('users.read'), async (req, res) => {
-    const db = await customer.store(), u = db.users.find(x => x.id === req.params.id);
-    if (!u) return res.status(404).json({error: 'User not found.'});
-    const p = u.profile || {};
-    res.json({
-      user: userRow(u),
-      learning: {level: p.level || null, xp: p.xp || 0, streak: p.streak || 0, sessions: Array.isArray(p.sessions) ? p.sessions.length : 0, reviews: Array.isArray(p.reviews) ? p.reviews.length : 0, lastActive: p.lastActive || null},
-      activeSessions: db.sessions.filter(s => s.userId === u.id && s.expires > Date.now()).length,
-      orders: db.orders.filter(o => o.userId === u.id).sort(newest).map(({reference, plan, term, amount, status, createdAt, paidAt, expiresAt}) => ({reference, plan, term, amount, status, createdAt, paidAt, expiresAt})),
-      tickets: db.supportTickets.filter(t => t.userId === u.id).sort(newest).map(({reference, subject, status, category, createdAt}) => ({reference, subject, status, category, createdAt})),
-    });
-  });
-  router.patch('/admin/users/:id/status', requireAdmin('users.write'), async (req, res) => {
     try {
-      const status = clean(req.body?.status, 20), reason = reasonOf(req);
-      if (!['active', 'suspended'].includes(status)) return res.status(400).json({error: 'Status must be active or suspended.'});
-      let found;
-      await customer.mutate(db => {
-        found = db.users.find(x => x.id === req.params.id); if (!found) return;
-        const from = found.status || 'active'; found.status = status;
-        if (status === 'suspended') db.sessions = db.sessions.filter(s => s.userId !== found.id);
-        appendAudit(db, {event: 'user_status_changed', actor: actorOf(req), target: {type: 'user', id: found.id}, meta: {from, to: status, reason}});
+      const d = await db(), u = await repo.users.byId(d, req.params.id);
+      if (!u) return res.status(404).json({error: 'User not found.'});
+      const p = u.profile || {};
+      res.json({
+        user: userRow(u),
+        learning: {level: p.level || null, xp: p.xp || 0, streak: p.streak || 0, sessions: Array.isArray(p.sessions) ? p.sessions.length : 0, reviews: Array.isArray(p.reviews) ? p.reviews.length : 0, lastActive: p.lastActive || null},
+        activeSessions: await repo.sessions.countForUser(d, u.id),
+        orders: (await repo.orders.listForUser(d, u.id)).map(({reference, plan, term, amount, status, createdAt, paidAt, expiresAt}) => ({reference, plan, term, amount, status, createdAt, paidAt, expiresAt})),
+        tickets: (await repo.tickets.listForUser(d, u.id)).map(({reference, subject, status, category, createdAt}) => ({reference, subject, status, category, createdAt})),
       });
-      if (!found) return res.status(404).json({error: 'User not found.'});
-      res.json({user: userRow(found)});
     } catch (e) { fail(res, e); }
   });
-  router.post('/admin/users/:id/revoke-sessions', requireAdmin('users.write'), async (req, res) => {
+  // Shared shape for "act on one learner inside a transaction, audit it, return the updated row".
+  const userAction = (perm, fn) => [requireAdmin(perm), async (req, res) => {
     try {
-      const reason = reasonOf(req); let found, count = 0;
-      await customer.mutate(db => {
-        found = db.users.find(x => x.id === req.params.id); if (!found) return;
-        count = db.sessions.filter(s => s.userId === found.id).length;
-        db.sessions = db.sessions.filter(s => s.userId !== found.id);
-        appendAudit(db, {event: 'user_sessions_revoked', actor: actorOf(req), target: {type: 'user', id: found.id}, meta: {count, reason}});
+      const out = await (await db()).tx(async q => {
+        const u = await repo.users.lockById(q, req.params.id);
+        if (!u) throw httpError(404, 'User not found.');
+        const extra = await fn(q, u, req);
+        return {user: userRow(await repo.users.byId(q, u.id)), ...extra};
       });
-      if (!found) return res.status(404).json({error: 'User not found.'});
-      res.json({ok: true, revoked: count});
+      res.json(out);
     } catch (e) { fail(res, e); }
-  });
-  router.post('/admin/users/:id/verify-email', requireAdmin('users.write'), async (req, res) => {
-    try {
-      const reason = reasonOf(req); let found;
-      await customer.mutate(db => {
-        found = db.users.find(x => x.id === req.params.id); if (!found) return;
-        found.emailVerified = true;
-        appendAudit(db, {event: 'user_email_marked_verified', actor: actorOf(req), target: {type: 'user', id: found.id}, meta: {reason}});
-      });
-      if (!found) return res.status(404).json({error: 'User not found.'});
-      res.json({user: userRow(found)});
-    } catch (e) { fail(res, e); }
-  });
-  router.post('/admin/users/:id/entitlements', requireAdmin('orders.write'), async (req, res) => {
-    try {
-      const reason = reasonOf(req), plan = clean(req.body?.plan, 20), days = parseInt(req.body?.days, 10);
-      if (!['essential', 'plus'].includes(plan) || !(days >= 1 && days <= 400)) return res.status(400).json({error: 'Choose a plan (essential/plus) and 1-400 days.'});
-      let found;
-      await customer.mutate(db => {
-        found = db.users.find(x => x.id === req.params.id); if (!found) return;
-        found.entitlements ??= {};
-        const now = Date.now(), prior = found.entitlements.English;
-        const start = prior?.expiresAt > now ? prior.expiresAt : now;
-        found.entitlements.English = {plan, expiresAt: start + days * 86400000, source: 'manual', grantedBy: req.admin.id, grantedAt: nowIso()};
-        appendAudit(db, {event: 'entitlement_granted', actor: actorOf(req), target: {type: 'user', id: found.id}, meta: {language: 'English', plan, days, expiresAt: found.entitlements.English.expiresAt, reason}});
-      });
-      if (!found) return res.status(404).json({error: 'User not found.'});
-      res.json({user: userRow(found)});
-    } catch (e) { fail(res, e); }
-  });
-  router.delete('/admin/users/:id/entitlements/English', requireAdmin('orders.write'), async (req, res) => {
-    try {
-      const reason = reasonOf(req); let found, had = false;
-      await customer.mutate(db => {
-        found = db.users.find(x => x.id === req.params.id); if (!found) return;
-        had = !!found.entitlements?.English;
-        if (had) delete found.entitlements.English;
-        appendAudit(db, {event: 'entitlement_revoked', actor: actorOf(req), target: {type: 'user', id: found.id}, meta: {language: 'English', existed: had, reason}});
-      });
-      if (!found) return res.status(404).json({error: 'User not found.'});
-      res.json({user: userRow(found), revoked: had});
-    } catch (e) { fail(res, e); }
-  });
+  }];
+  router.patch('/admin/users/:id/status', ...userAction('users.write', async (q, u, req) => {
+    const status = clean(req.body?.status, 20), reason = reasonOf(req);
+    if (!['active', 'suspended'].includes(status)) throw httpError(400, 'Status must be active or suspended.');
+    await repo.users.update(q, u.id, {status});
+    if (status === 'suspended') await repo.sessions.removeForUser(q, u.id);
+    await audit(q, {event: 'user_status_changed', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {from: u.status || 'active', to: status, reason}});
+  }));
+  router.post('/admin/users/:id/revoke-sessions', ...userAction('users.write', async (q, u, req) => {
+    const reason = reasonOf(req), count = await repo.sessions.removeForUser(q, u.id);
+    await audit(q, {event: 'user_sessions_revoked', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {count, reason}});
+    return {ok: true, revoked: count};
+  }));
+  router.post('/admin/users/:id/verify-email', ...userAction('users.write', async (q, u, req) => {
+    const reason = reasonOf(req);
+    await repo.users.update(q, u.id, {emailVerified: true});
+    await audit(q, {event: 'user_email_marked_verified', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {reason}});
+  }));
+  router.post('/admin/users/:id/entitlements', ...userAction('orders.write', async (q, u, req) => {
+    const reason = reasonOf(req), plan = clean(req.body?.plan, 20), days = parseInt(req.body?.days, 10);
+    if (!['essential', 'plus'].includes(plan) || !(days >= 1 && days <= 400)) throw httpError(400, 'Choose a plan (essential/plus) and 1-400 days.');
+    const now = Date.now(), prior = u.entitlements?.English, start = prior?.expiresAt > now ? prior.expiresAt : now;
+    const expiresAt = start + days * 86400000;
+    await repo.entitlements.set(q, u.id, 'English', {plan, expiresAt, source: 'manual', grantedBy: req.admin.id, grantedAt: nowIso()});
+    await audit(q, {event: 'entitlement_granted', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {language: 'English', plan, days, expiresAt, reason}});
+  }));
+  router.delete('/admin/users/:id/entitlements/English', ...userAction('orders.write', async (q, u, req) => {
+    const reason = reasonOf(req), had = await repo.entitlements.remove(q, u.id, 'English');
+    await audit(q, {event: 'entitlement_revoked', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {language: 'English', existed: had, reason}});
+    return {revoked: had};
+  }));
 
   // ---------------- Orders ----------------
   router.get('/admin/orders', requireAdmin('orders.read'), async (req, res) => {
-    const db = await customer.store(), n = needle(req), status = clean(req.query.status, 30), plan = clean(req.query.plan, 20);
-    const byId = new Map(db.users.map(u => [u.id, u]));
-    const rows = db.orders.map(o => ({...o, customer: byId.get(o.userId) ? {id: o.userId, name: byId.get(o.userId).name, email: byId.get(o.userId).email} : null}))
-      .filter(o => hit(n, o.reference, o.customer?.email, o.customer?.name, o.paymobOrderId, o.manualPaymentReference) && (!status || o.status === status) && (!plan || o.plan === plan))
-      .sort(newest).map(({intentionId, ...o}) => o);
-    res.json(pageOf(req, rows));
+    try {
+      const r = await repo.orders.list(await db(), {needle: needle(req), status: clean(req.query.status, 30), plan: clean(req.query.plan, 20), ...paging(req)});
+      res.json({...r, items: r.items.map(({intentionId, ...o}) => o)});
+    } catch (e) { fail(res, e); }
   });
   // Manual activation after staff independently reconciled the payment (replaces scripts/activate-manual.mjs).
   router.post('/admin/orders/:reference/activate', requireAdmin('orders.write'), async (req, res) => {
     try {
       const reason = reasonOf(req), paymentReference = clean(req.body?.paymentReference, 80);
       if (paymentReference.length < 6) return res.status(400).json({error: 'Enter the verified payment reference (at least 6 characters).'});
-      let outcome;
-      await customer.mutate(db => {
-        const o = db.orders.find(x => x.reference === req.params.reference);
-        if (!o) { outcome = {status: 404, error: 'Order not found.'}; return; }
-        if (o.status !== 'pending_contact') { outcome = {status: 409, error: `Only orders awaiting manual payment can be activated (this one is ${o.status}).`}; return; }
-        if (db.orders.some(x => x.manualPaymentReference === paymentReference)) { outcome = {status: 409, error: 'This payment reference was already used for another order.'}; return; }
-        const u = db.users.find(x => x.id === o.userId);
-        if (!u) { outcome = {status: 409, error: 'The customer account no longer exists.'}; return; }
+      const order = await (await db()).tx(async q => {
+        const o = await repo.orders.byRef(q, req.params.reference, {lock: true});
+        if (!o) throw httpError(404, 'Order not found.');
+        if (o.status !== 'pending_contact') throw httpError(409, `Only orders awaiting manual payment can be activated (this one is ${o.status}).`);
+        if (await repo.orders.manualRefUsed(q, paymentReference)) throw httpError(409, 'This payment reference was already used for another order.');
+        const u = o.userId && await repo.users.lockById(q, o.userId);
+        if (!u) throw httpError(409, 'The customer account no longer exists.');
         const now = Date.now(), prior = u.entitlements?.[o.language];
         const d = new Date(prior?.expiresAt > now ? prior.expiresAt : now); d.setUTCMonth(d.getUTCMonth() + (o.term === 'yearly' ? 12 : 1));
-        Object.assign(o, {status: 'paid', paidAt: new Date(now).toISOString(), expiresAt: d.getTime(), manualPaymentReference: paymentReference, activatedBy: req.admin.id});
-        u.entitlements ??= {};
-        u.entitlements[o.language] = {plan: o.plan, expiresAt: o.expiresAt, orderReference: o.reference, source: 'manual_payment'};
-        appendAudit(db, {event: 'order_manually_activated', actor: actorOf(req), target: {type: 'order', id: o.reference}, meta: {userId: u.id, amount: o.amount, paymentReference, expiresAt: o.expiresAt, reason}});
-        outcome = {status: 200, order: o};
+        const patch = {status: 'paid', paidAt: new Date(now).toISOString(), expiresAt: d.getTime(), manualPaymentReference: paymentReference, activatedBy: req.admin.id};
+        try { await repo.orders.update(q, o.reference, patch); }
+        catch (e) { if (isUniqueViolation(e)) throw httpError(409, 'This payment reference was already used for another order.'); throw e; }
+        await repo.entitlements.set(q, u.id, o.language, {plan: o.plan, expiresAt: d.getTime(), orderReference: o.reference, source: 'manual_payment'});
+        await audit(q, {event: 'order_manually_activated', actor: actorOf(req), target: {type: 'order', id: o.reference}, meta: {userId: u.id, amount: o.amount, paymentReference, expiresAt: d.getTime(), reason}});
+        return {...o, ...patch};
       });
-      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
-      res.json({order: outcome.order});
+      res.json({order});
     } catch (e) { fail(res, e); }
   });
   // Records a refund decision and removes the access it paid for. The money itself is returned through the
   // payment provider's merchant dashboard; this endpoint does NOT move money.
   router.post('/admin/orders/:reference/refund', requireAdmin('orders.write'), async (req, res) => {
     try {
-      const reason = reasonOf(req); let outcome;
-      await customer.mutate(db => {
-        const o = db.orders.find(x => x.reference === req.params.reference);
-        if (!o) { outcome = {status: 404, error: 'Order not found.'}; return; }
-        if (o.status !== 'paid') { outcome = {status: 409, error: `Only paid orders can be marked refunded (this one is ${o.status}).`}; return; }
-        const u = db.users.find(x => x.id === o.userId);
-        let revoked = false;
-        if (u?.entitlements?.[o.language]?.orderReference === o.reference) { delete u.entitlements[o.language]; revoked = true; }
-        Object.assign(o, {status: 'refunded', refundedAt: nowIso(), refundedBy: req.admin.id});
-        appendAudit(db, {event: 'order_refund_recorded', actor: actorOf(req), target: {type: 'order', id: o.reference}, meta: {userId: o.userId, amount: o.amount, entitlementRevoked: revoked, reason}});
-        outcome = {status: 200, order: o, entitlementRevoked: revoked};
+      const reason = reasonOf(req);
+      const out = await (await db()).tx(async q => {
+        const o = await repo.orders.byRef(q, req.params.reference, {lock: true});
+        if (!o) throw httpError(404, 'Order not found.');
+        if (o.status !== 'paid') throw httpError(409, `Only paid orders can be marked refunded (this one is ${o.status}).`);
+        const revoked = o.userId ? await repo.entitlements.removeIfOrder(q, o.userId, o.language, o.reference) : false;
+        const patch = {status: 'refunded', refundedAt: nowIso(), refundedBy: req.admin.id};
+        await repo.orders.update(q, o.reference, patch);
+        await audit(q, {event: 'order_refund_recorded', actor: actorOf(req), target: {type: 'order', id: o.reference}, meta: {userId: o.userId, amount: o.amount, entitlementRevoked: revoked, reason}});
+        return {order: {...o, ...patch}, entitlementRevoked: revoked};
       });
-      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
-      res.json({order: outcome.order, entitlementRevoked: outcome.entitlementRevoked, notice: 'Refund recorded. Return the money in the payment provider dashboard; this action does not move funds.'});
+      res.json({...out, notice: 'Refund recorded. Return the money in the payment provider dashboard; this action does not move funds.'});
     } catch (e) { fail(res, e); }
   });
 
   // ---------------- Support ----------------
   const TICKET_STATUS = ['open', 'in_progress', 'resolved', 'closed'];
   router.get('/admin/support', requireAdmin('support.read'), async (req, res) => {
-    const db = await customer.store(), n = needle(req), status = clean(req.query.status, 20), category = clean(req.query.category, 30);
-    const byId = new Map(db.users.map(u => [u.id, u]));
-    const rows = db.supportTickets.map(t => ({...t, customer: byId.get(t.userId) ? {id: t.userId, name: byId.get(t.userId).name, email: byId.get(t.userId).email} : null}))
-      .filter(t => hit(n, t.reference, t.subject, t.message, t.customer?.email) && (!status || t.status === status) && (!category || t.category === category)).sort(newest);
-    res.json(pageOf(req, rows));
+    try { res.json(await repo.tickets.list(await db(), {needle: needle(req), status: clean(req.query.status, 20), category: clean(req.query.category, 30), ...paging(req)})); } catch (e) { fail(res, e); }
   });
   router.patch('/admin/support/:reference', requireAdmin('support.write'), async (req, res) => {
-    const status = clean(req.body?.status, 20), resolution = clean(req.body?.resolution, 800);
-    if (!TICKET_STATUS.includes(status)) return res.status(400).json({error: 'Invalid status.'});
-    let found;
-    await customer.mutate(db => {
-      found = db.supportTickets.find(x => x.reference === req.params.reference); if (!found) return;
-      const from = found.status; found.status = status; found.resolution = resolution; found.updatedAt = nowIso(); found.updatedBy = req.admin.id;
-      appendAudit(db, {event: 'support_updated', actor: actorOf(req), target: {type: 'ticket', id: found.reference}, meta: {from, to: status}});
-    });
-    if (!found) return res.status(404).json({error: 'Ticket not found.'});
-    res.json({ticket: found});
+    try {
+      const status = clean(req.body?.status, 20), resolution = clean(req.body?.resolution, 800);
+      if (!TICKET_STATUS.includes(status)) return res.status(400).json({error: 'Invalid status.'});
+      const ticket = await (await db()).tx(async q => {
+        const t = await repo.tickets.byRef(q, req.params.reference);
+        if (!t) throw httpError(404, 'Ticket not found.');
+        await repo.tickets.update(q, t.reference, {status, resolution, updatedBy: req.admin.id});
+        await audit(q, {event: 'support_updated', actor: actorOf(req), target: {type: 'ticket', id: t.reference}, meta: {from: t.status, to: status}});
+        return repo.tickets.byRef(q, t.reference);
+      });
+      res.json({ticket});
+    } catch (e) { fail(res, e); }
   });
 
   // ---------------- Leads ----------------
   const LEAD_STATUS = ['new', 'contacted', 'qualified', 'converted', 'closed'];
-  // One-time import of the legacy JSONL leads file into the primary store (idempotent, by reference).
+  // One-time import of the legacy JSONL leads file (idempotent by reference).
   async function importLegacyLeads() {
-    const db = await customer.store();
-    if (db.meta?.leadsImported || !leadsFile) return;
+    const d = await db();
+    if (!leadsFile || await repo.meta.get(d, 'leads_jsonl_imported')) return;
     let rows = [];
-    try { rows = (await readFile(leadsFile, 'utf8')).split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); }
+    try { rows = (await readFile(leadsFile, 'utf8')).split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(r => r?.reference); }
     catch (e) { if (e.code !== 'ENOENT') throw e; }
-    await customer.mutate(d => {
-      if (d.meta?.leadsImported) return;
-      const known = new Set(d.leads.map(l => l.reference));
-      const fresh = rows.filter(r => r.reference && !known.has(r.reference));
-      d.leads.push(...fresh);
-      d.meta = {...(d.meta || {}), leadsImported: true, leadsImportedAt: nowIso(), leadsImportedCount: fresh.length};
-      if (fresh.length) appendAudit(d, {event: 'leads_imported', actor: {type: 'system'}, meta: {count: fresh.length}});
+    await d.tx(async q => {
+      if (await repo.meta.get(q, 'leads_jsonl_imported')) return;
+      for (const r of rows) await repo.leads.create(q, r);
+      await repo.meta.set(q, 'leads_jsonl_imported', {at: nowIso(), count: rows.length});
+      if (rows.length) await audit(q, {event: 'leads_imported', actor: {type: 'system'}, meta: {count: rows.length}});
     });
   }
   router.get('/admin/leads', requireAdmin('leads.read'), async (req, res) => {
     try {
       await importLegacyLeads();
-      const db = await customer.store(), n = needle(req), status = clean(req.query.status, 20), kind = clean(req.query.kind, 20);
-      const rows = db.leads.map(l => ({...l, status: l.status || 'new'}))
-        .filter(l => hit(n, l.reference, l.name, l.email, l.phone, l.company, l.message) && (!status || l.status === status) && (!kind || l.kind === kind)).sort(newest);
-      res.json(pageOf(req, rows));
+      res.json(await repo.leads.list(await db(), {needle: needle(req), status: clean(req.query.status, 20), kind: clean(req.query.kind, 20), ...paging(req)}));
     } catch (e) { fail(res, e); }
   });
   router.patch('/admin/leads/:reference', requireAdmin('leads.write'), async (req, res) => {
-    const status = clean(req.body?.status, 20), note = clean(req.body?.note, 1000);
-    if (!LEAD_STATUS.includes(status)) return res.status(400).json({error: 'Invalid lead status.'});
-    let found;
-    await customer.mutate(db => {
-      found = db.leads.find(x => x.reference === req.params.reference); if (!found) return;
-      const from = found.status || 'new'; found.status = status; found.updatedAt = nowIso();
-      if (note) (found.notes ??= []).push({at: nowIso(), adminId: req.admin.id, text: note});
-      appendAudit(db, {event: 'lead_updated', actor: actorOf(req), target: {type: 'lead', id: found.reference}, meta: {from, to: status, noted: !!note}});
-    });
-    if (!found) return res.status(404).json({error: 'Lead not found.'});
-    res.json({lead: found});
+    try {
+      const status = clean(req.body?.status, 20), note = clean(req.body?.note, 1000);
+      if (!LEAD_STATUS.includes(status)) return res.status(400).json({error: 'Invalid lead status.'});
+      const lead = await (await db()).tx(async q => {
+        const before = await repo.leads.byRef(q, req.params.reference);
+        if (!before) throw httpError(404, 'Lead not found.');
+        const after = await repo.leads.update(q, before.reference, {status, note: note || null, adminId: req.admin.id});
+        await audit(q, {event: 'lead_updated', actor: actorOf(req), target: {type: 'lead', id: before.reference}, meta: {from: before.status || 'new', to: status, noted: !!note}});
+        return after;
+      });
+      res.json({lead});
+    } catch (e) { fail(res, e); }
   });
 
   // ---------------- Audit ----------------
   router.get('/admin/audit', requireAdmin('audit.read'), async (req, res) => {
-    const db = await customer.store(), n = needle(req), event = clean(req.query.event, 60), actorType = clean(req.query.actorType, 20);
-    const adminsById = new Map(db.admins.map(a => [a.id, a]));
-    const rows = [...db.auditLog].reverse().map(e => ({
-      seq: e.seq || null, id: e.id, at: e.at, event: e.event, chained: !!e.hash,
-      actor: e.actor || (e.userId ? {type: 'user', id: e.userId} : null),
-      actorLabel: e.actor?.type === 'admin' ? (adminsById.get(e.actor.id)?.email || 'deleted admin') : e.actor?.type || (e.userId ? 'user' : 'system'),
-      target: e.target || null, meta: e.meta || {},
-    })).filter(e => (!event || e.event === event) && (!actorType || e.actor?.type === actorType) && hit(n, e.event, e.actorLabel, e.target?.id, e.actor?.id, JSON.stringify(e.meta)));
-    res.json({...pageOf(req, rows), events: [...new Set(db.auditLog.map(e => e.event))].sort()});
+    try {
+      const d = await db();
+      const r = await repo.audit.list(d, {needle: needle(req), event: clean(req.query.event, 60), actorType: clean(req.query.actorType, 20), ...paging(req)});
+      const emails = await repo.admins.emailsById(d, [...new Set(r.items.filter(e => e.actor?.type === 'admin').map(e => e.actor.id))]);
+      const items = r.items.map(e => {
+        const actor = e.actor || (e.legacy?.userId ? {type: 'user', id: e.legacy.userId} : null);
+        return {seq: e.seq > 0 ? e.seq : null, id: e.id, at: e.at, event: e.event, chained: !!e.hash, actor,
+          actorLabel: actor?.type === 'admin' ? (emails.get(actor.id) || 'deleted admin') : actor?.type || 'system', target: e.target || null, meta: e.meta || {}};
+      });
+      res.json({...r, items, events: await repo.audit.events(d)});
+    } catch (e) { fail(res, e); }
   });
   router.get('/admin/audit/verify', requireAdmin('audit.read'), async (req, res) => {
-    const result = verifyAudit(await customer.store());
-    await customer.mutate(db => { appendAudit(db, {event: 'audit_verified', actor: actorOf(req), meta: {ok: result.ok, checked: result.checked}}); });
-    res.json(result);
+    try {
+      const d = await db(), result = await repo.audit.verify(d);
+      await d.tx(q => audit(q, {event: 'audit_verified', actor: actorOf(req), meta: {ok: result.ok, checked: result.checked}}));
+      res.json(result);
+    } catch (e) { fail(res, e); }
   });
 
   // ---------------- Roles & administrators ----------------
   router.get('/admin/roles', requireAdmin('admins.read'), (_req, res) => res.json({roles: ROLES, permissions: PERMISSIONS}));
   router.get('/admin/admins', requireAdmin('admins.read'), async (req, res) => {
-    const db = await customer.store(), n = needle(req);
-    res.json(pageOf(req, db.admins.filter(a => hit(n, a.email, a.name, a.role)).sort(newest).map(publicAdmin)));
+    try { const r = await repo.admins.list(await db(), {needle: needle(req), ...paging(req)}); res.json({...r, items: r.items.map(publicAdmin)}); } catch (e) { fail(res, e); }
   });
   router.post('/admin/admins', requireAdmin('admins.write'), async (req, res) => {
     try {
       const role = clean(req.body?.role, 20);
       if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can create another owner.'});
       const a = await buildAdmin({email: req.body?.email, name: req.body?.name, role, password: String(req.body?.password || ''), createdBy: req.admin.id});
-      let dup = false;
-      await customer.mutate(db => {
-        if (db.admins.some(x => x.email === a.email)) { dup = true; return; }
-        db.admins.push(a);
-        appendAudit(db, {event: 'admin_created', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {role}});
-      });
-      if (dup) return res.status(409).json({error: 'An administrator with this email already exists.'});
+      try {
+        await (await db()).tx(async q => { await repo.admins.create(q, a); await audit(q, {event: 'admin_created', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {role}}); });
+      } catch (e) { if (isUniqueViolation(e)) return res.status(409).json({error: 'An administrator with this email already exists.'}); throw e; }
       res.status(201).json({admin: publicAdmin(a)});
     } catch (e) { fail(res, e); }
   });
@@ -586,43 +515,39 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     try {
       const reason = reasonOf(req);
       if (req.params.id === req.admin.id) return res.status(409).json({error: 'Use your own security settings to change your two-factor authentication.'});
-      let outcome;
-      await customer.mutate(db => {
-        const a = db.admins.find(x => x.id === req.params.id);
-        if (!a) { outcome = {status: 404, error: 'Administrator not found.'}; return; }
-        const had = !!a.mfa?.enabled;
-        delete a.mfa;
-        db.adminSessions = db.adminSessions.filter(s => s.adminId !== a.id);
-        appendAudit(db, {event: 'admin_mfa_reset', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {wasEnabled: had, reason}});
-        outcome = {status: 200, admin: publicAdmin(a)};
+      const admin = await (await db()).tx(async q => {
+        const a = await repo.admins.byId(q, req.params.id, {lock: true});
+        if (!a) throw httpError(404, 'Administrator not found.');
+        await repo.admins.update(q, a.id, {mfa: null});
+        await repo.adminSessions.removeForAdmin(q, a.id);
+        await audit(q, {event: 'admin_mfa_reset', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {wasEnabled: !!a.mfa?.enabled, reason}});
+        return publicAdmin({...a, mfa: null});
       });
-      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
-      res.json({admin: outcome.admin});
+      res.json({admin});
     } catch (e) { fail(res, e); }
   });
-
   router.patch('/admin/admins/:id', requireAdmin('admins.write'), async (req, res) => {
-    const role = req.body?.role === undefined ? undefined : clean(req.body.role, 20);
-    const status = req.body?.status === undefined ? undefined : clean(req.body.status, 20);
-    if (req.params.id === req.admin.id) return res.status(409).json({error: 'You cannot change your own role or status.'});
-    if (role !== undefined && !ROLES[role]) return res.status(400).json({error: 'Unknown role.'});
-    if (status !== undefined && !['active', 'disabled'].includes(status)) return res.status(400).json({error: 'Status must be active or disabled.'});
-    if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can grant the owner role.'});
-    let outcome;
-    await customer.mutate(db => {
-      const a = db.admins.find(x => x.id === req.params.id);
-      if (!a) { outcome = {status: 404, error: 'Administrator not found.'}; return; }
-      const next = {role: role ?? a.role, status: status ?? a.status};
-      const ownersAfter = db.admins.filter(x => (x.id === a.id ? next.role === 'owner' && next.status === 'active' : x.role === 'owner' && x.status === 'active')).length;
-      if (ownersAfter === 0) { outcome = {status: 409, error: 'At least one active owner must remain.'}; return; }
-      const before = {role: a.role, status: a.status};
-      Object.assign(a, next);
-      if (next.status === 'disabled' || next.role !== before.role) db.adminSessions = db.adminSessions.filter(s => s.adminId !== a.id);
-      appendAudit(db, {event: 'admin_updated', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {before, after: next}});
-      outcome = {status: 200, admin: publicAdmin(a)};
-    });
-    if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
-    res.json({admin: outcome.admin});
+    try {
+      const role = req.body?.role === undefined ? undefined : clean(req.body.role, 20);
+      const status = req.body?.status === undefined ? undefined : clean(req.body.status, 20);
+      if (req.params.id === req.admin.id) return res.status(409).json({error: 'You cannot change your own role or status.'});
+      if (role !== undefined && !ROLES[role]) return res.status(400).json({error: 'Unknown role.'});
+      if (status !== undefined && !['active', 'disabled'].includes(status)) return res.status(400).json({error: 'Status must be active or disabled.'});
+      if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can grant the owner role.'});
+      const admin = await (await db()).tx(async q => {
+        const a = await repo.admins.byId(q, req.params.id, {lock: true});
+        if (!a) throw httpError(404, 'Administrator not found.');
+        const next = {role: role ?? a.role, status: status ?? a.status};
+        const ownersAfter = await repo.admins.activeOwnersExcept(q, a.id) + (next.role === 'owner' && next.status === 'active' ? 1 : 0);
+        if (ownersAfter === 0) throw httpError(409, 'At least one active owner must remain.');
+        const before = {role: a.role, status: a.status};
+        await repo.admins.update(q, a.id, next);
+        if (next.status === 'disabled' || next.role !== before.role) await repo.adminSessions.removeForAdmin(q, a.id);
+        await audit(q, {event: 'admin_updated', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {before, after: next}});
+        return publicAdmin({...a, ...next});
+      });
+      res.json({admin});
+    } catch (e) { fail(res, e); }
   });
 
   return router;

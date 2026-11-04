@@ -13,7 +13,7 @@ const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error(' 
 const RUN_PREFIX = 'abuse' + Date.now() + Math.random().toString(36).slice(2, 8);
 
 async function start(dir, port, extra = {}) {
-  const child = spawn(process.execPath, ['server/index.js'], {env: {...process.env, PORT: String(port), CUSTOMER_DB_FILE: join(dir, 'c.json'), LEADS_FILE: join(dir, 'l.jsonl'), NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN_PREFIX, ...extra}, stdio: ['ignore', 'ignore', 'pipe']});
+  const child = spawn(process.execPath, ['server/index.js'], {env: {...process.env, PORT: String(port), CUSTOMER_DB_FILE: join(dir, port + '.json'), LEADS_FILE: join(dir, 'l.jsonl'), NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN_PREFIX, ...extra}, stdio: ['ignore', 'ignore', 'pipe']});
   const origin = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {child, origin}; } catch {} await new Promise(r => setTimeout(r, 100)); }
   child.kill(); throw Error('server did not start on ' + port);

@@ -3,7 +3,8 @@ import {spawn} from 'node:child_process';
 import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {freePort} from './helpers.mjs';
+import {freePort, stopServer} from './helpers.mjs';
+import {createDb} from '../server/db/index.js';
 import {totpAt} from '../server/totp.js';
 
 let failures = 0;
@@ -18,13 +19,13 @@ const env = extra => ({...process.env, NODE_ENV: 'test', DATABASE_URL: '', CUSTO
 const cli = (args, extra) => new Promise(r => { const p = spawn(process.execPath, ['scripts/create-admin.mjs', ...args], {env: {...env(extra), ADMIN_PASSWORD: PW}, stdio: 'ignore'}); p.on('exit', r); });
 async function start(extra = {}) {
   const port = await freePort();
-  const child = spawn(process.execPath, ['server/index.js'], {env: {...env(extra), PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
+  const child = spawn(process.execPath, ['server/index.js'], {env: {...env(extra), PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe', 'ipc']});
   procs.push(child);
   const origin = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, child}; } catch {} await sleep(100); }
   throw Error('server did not start');
 }
-const stop = async s => { s.child.kill(); await sleep(300); };
+const stop = s => stopServer(s.child); // graceful: the server closes its database before exiting
 let O;
 async function call(path, {method = 'GET', body, cookie} = {}) {
   const r = await fetch(O + path, {method, headers: {...(body ? {'Content-Type': 'application/json'} : {}), ...(cookie ? {Cookie: cookie} : {})}, body: body ? JSON.stringify(body) : undefined});
@@ -51,13 +52,10 @@ try {
   const setup = await call('/api/admin/mfa/setup', {method: 'POST', cookie: ownerA});
   const secret = setup.data.secret;
   ok(setup.status === 200 && /^[A-Z2-7]{32}$/.test(secret) && setup.data.otpauthUri.includes('secret=' + secret), 'setup returns a 160-bit base32 secret and an otpauth URI');
-  const raw = await readFile(dbFile, 'utf8');
-  ok(!raw.includes(secret) && JSON.parse(raw).admins.find(a => a.email === owner).mfa.pending.startsWith('v1.'), 'the TOTP secret is stored encrypted (AES-GCM), never in plaintext');
   ok((await call('/api/admin/mfa/enable', {method: 'POST', cookie: ownerA, body: {code: '000000'}})).status === 400, 'enable with a wrong code -> 400');
   const en = await call('/api/admin/mfa/enable', {method: 'POST', cookie: ownerA, body: {code: totpAt(secret)}});
   const codes = en.data.recoveryCodes || [];
   ok(en.status === 200 && codes.length === 8 && new Set(codes).size === 8 && codes.every(c => /^[a-z2-7]{5}-[a-z2-7]{5}$/.test(c)), 'enable with a correct code returns 8 unique recovery codes');
-  ok(!(await readFile(dbFile, 'utf8')).includes(codes[0]), 'recovery codes are stored hashed only');
   ok((await call('/api/admin/auth/me', {cookie: other})).status === 401, 'enabling MFA ends the admin\'s other (password-only) sessions');
   ok((await call('/api/admin/auth/me', {cookie: ownerA})).data.admin?.mfaEnabled === true, 'the enrolling session stays signed in and reports mfaEnabled');
   ok((await call('/api/admin/mfa/setup', {method: 'POST', cookie: ownerA})).status === 409, 'setup again while enabled -> 409');
@@ -142,6 +140,13 @@ try {
   const nk = await login(viewer);
   ok((await call('/api/admin/mfa/setup', {method: 'POST', cookie: nk.cookie})).status === 503, 'without ADMIN_MFA_KEY, enrollment is refused (503) instead of storing secrets unprotected');
   await stop(S);
+  // ---------- at-rest checks, read straight from the database after a clean shutdown ----------
+  const raw = await createDb({databaseUrl: '', dataDir: dbFile.replace(/\.json$/, '') + '-pglite'});
+  const rows = (await raw.query('SELECT email, mfa::text AS mfa FROM admins')).rows;
+  await raw.close();
+  const all = rows.map(r => r.mfa || '').join(' ');
+  ok(!all.includes(secret) && JSON.parse(rows.find(r => r.email === owner).mfa).secret.startsWith('v1.'), 'the TOTP secret is stored encrypted (AES-GCM), never in plaintext');
+  ok(!codes.some(c => all.includes(c) || all.includes(c.replace('-', ''))), 'recovery codes are stored hashed only');
 } catch (e) {
   console.error('  FAIL: unexpected error', e); failures++;
 } finally {

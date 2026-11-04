@@ -1,9 +1,10 @@
 // Admin RBAC + operations integration tests (real server processes, real HTTP, real storage).
 import {spawn} from 'node:child_process';
-import {mkdtemp, rm, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {freePort} from './helpers.mjs';
+import {freePort, stopServer} from './helpers.mjs';
+import {createDb} from '../server/db/index.js';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
@@ -24,13 +25,13 @@ function runCli(script, args, env, input) {
 }
 async function start(env) {
   const port = await freePort();
-  const child = spawn(process.execPath, ['server/index.js'], {env: {...env, PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
+  const child = spawn(process.execPath, ['server/index.js'], {env: {...env, PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe', 'ipc']});
   procs.push(child);
   const origin = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, child}; } catch {} await sleep(100); }
   throw Error('server did not start');
 }
-const stop = async s => { s.child.kill(); await sleep(300); };
+const stop = s => stopServer(s.child); // graceful: the server closes its database before exiting
 async function call(origin, path, {method = 'GET', body, cookie, headers = {}} = {}) {
   const r = await fetch(origin + path, {method, headers: {...(body ? {'Content-Type': 'application/json'} : {}), ...(cookie ? {Cookie: cookie} : {}), ...headers}, body: body ? JSON.stringify(body) : undefined});
   let data = {}; try { data = await r.json(); } catch {}
@@ -208,7 +209,7 @@ try {
   ok((await call(O, '/api/admin/overview', {cookie: owner.cookie})).status === 401, 'logout invalidates the admin session');
   await stop(S);
 
-  // ======================= JSON-only: tamper evidence, idle timeout, legacy migration mode =======================
+  // ======================= embedded PGlite: tamper evidence, idle timeout, legacy migration mode =======================
   const tFile = join(dir, 'tamper.json');
   const tEnv = baseEnv({CUSTOMER_DB_FILE: tFile, DATABASE_URL: '', ADMIN_IDLE_MS: '1500', ADMIN_LEGACY_TOKEN: 'true', ADMIN_ACCESS_TOKEN: 'L'.repeat(40)});
   const tOwner = `towner-${RUN}@example.com`;
@@ -223,11 +224,11 @@ try {
   await sleep(2200);
   ok((await call(T.origin, '/api/admin/auth/me', {cookie: to.cookie})).status === 401, 'admin session expires after the idle timeout');
   await stop(T);
-  // Tamper with a recorded audit entry directly in the data file (an attacker with storage access, no key).
-  const doc = JSON.parse(await readFile(tFile, 'utf8'));
-  const target = doc.auditLog.find(e => e.event === 'admin_created' && e.actor?.type === 'admin');
-  target.meta.role = 'owner';
-  await writeFile(tFile, JSON.stringify(doc));
+  // Tamper with a recorded audit entry directly in the database (an attacker with storage access, no signing key).
+  const raw = await createDb({databaseUrl: '', dataDir: tFile.replace(/\.json$/, '') + '-pglite'});
+  const target = (await raw.query("SELECT seq FROM audit_log WHERE event = 'admin_created' AND actor->>'type' = 'admin' ORDER BY seq LIMIT 1")).rows[0];
+  await raw.query(`UPDATE audit_log SET meta = jsonb_set(meta, '{role}', '"owner"') WHERE seq = $1`, [target.seq]);
+  await raw.close();
   T = await start(tEnv);
   to = await adminLogin(T.origin, tOwner);
   const tv = await call(T.origin, '/api/admin/audit/verify', {cookie: to.cookie});

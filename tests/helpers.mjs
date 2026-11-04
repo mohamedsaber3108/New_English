@@ -16,3 +16,14 @@ export function freePort() {
     s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
   });
 }
+
+// Graceful stop for servers spawned with an 'ipc' stdio channel: lets the server close its database cleanly
+// (required before reopening the same embedded PGlite data directory). Falls back to a hard kill after 8 s.
+export function stopServer(child, timeoutMs = 8000) {
+  return new Promise(resolve => {
+    if (child.exitCode !== null || child.signalCode) return resolve();
+    const t = setTimeout(() => { try { child.kill(); } catch {} }, timeoutMs);
+    child.once('exit', () => { clearTimeout(t); resolve(); });
+    try { child.connected ? child.send('shutdown') : child.kill(); } catch { child.kill(); }
+  });
+}

@@ -2,7 +2,7 @@
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createStorage} from '../server/storage.js';
+import {createStorage} from './fixtures/legacy-storage.js'; // the OLD document store, used only to produce legacy-format data
 import {appendAudit} from '../server/audit.js';
 import {createDb} from '../server/db/index.js';
 import {autoImport} from '../server/db/legacy-import.js';

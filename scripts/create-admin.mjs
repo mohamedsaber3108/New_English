@@ -4,14 +4,15 @@
 //   echo 'a-long-unique-password' | node scripts/create-admin.mjs --email ... --name ... --role owner --password-stdin
 //
 // The password is never accepted as a command-line argument (it would leak into shell history / process lists).
-// Works with both storage backends (CUSTOMER_DB_FILE or DATABASE_URL). With the JSON backend, stop the server
-// first or restart it afterwards (the running server caches the file). With PostgreSQL it takes effect at once.
+// Uses the same database as the server: PostgreSQL when DATABASE_URL is set (works while the server runs), otherwise
+// the embedded PGlite data directory (the server must be stopped; the directory lock refuses concurrent use).
 import 'dotenv/config';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createStorage} from '../server/storage.js';
+import {createDb, pgliteDirFromEnv, isUniqueViolation} from '../server/db/index.js';
+import {autoImport} from '../server/db/legacy-import.js';
+import * as repo from '../server/db/repo.js';
 import {buildAdmin, ROLES} from '../server/admin.js';
-import {appendAudit} from '../server/audit.js';
 
 const args = process.argv.slice(2);
 const arg = name => { const i = args.indexOf('--' + name); return i >= 0 ? args[i + 1] : undefined; };
@@ -28,19 +29,19 @@ if (args.includes('--password-stdin')) {
 if (!password) usage();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const storage = createStorage({dbFile: process.env.CUSTOMER_DB_FILE || join(root, 'data', 'customers.json')});
+let db;
 try {
   const admin = await buildAdmin({email, name, role, password, createdBy: 'cli'});
-  let dup = false;
-  await storage.mutate(db => {
-    if (db.admins.some(a => a.email === admin.email)) { dup = true; return; }
-    db.admins.push(admin);
-    appendAudit(db, {event: 'admin_created', actor: {type: 'cli'}, target: {type: 'admin', id: admin.id}, meta: {role}});
+  db = await createDb({dataDir: pgliteDirFromEnv(root)});
+  await autoImport(db, {jsonFile: process.env.CUSTOMER_DB_FILE || join(root, 'data', 'customers.json')});
+  await db.tx(async q => {
+    await repo.admins.create(q, admin);
+    await repo.audit.append(q, {event: 'admin_created', actor: {type: 'cli'}, target: {type: 'admin', id: admin.id}, meta: {role}});
   });
-  if (dup) { console.error('An administrator with this email already exists.'); process.exitCode = 1; }
-  else console.log(`Created ${role} administrator ${admin.email} (${admin.id}) on ${storage.backend()} storage.`);
+  console.log(`Created ${role} administrator ${admin.email} (${admin.id}) on ${db.backend}.`);
 } catch (e) {
-  console.error(e.message); process.exitCode = 1;
+  console.error(isUniqueViolation(e) ? 'An administrator with this email already exists.' : e.message);
+  process.exitCode = 1;
 } finally {
-  await storage.close();
+  await db?.close();
 }

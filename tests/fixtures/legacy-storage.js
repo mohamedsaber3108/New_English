@@ -1,3 +1,5 @@
+// LEGACY (retired): the previous single-document store. Kept only as a test fixture that writes data in the old
+// format so tests/legacy-import.test.mjs can prove the migration. Not used by the application.
 // Storage adapter layer for USAM Language.
 //
 // Exposes a single logical document (collections: users, sessions, orders, supportTickets,

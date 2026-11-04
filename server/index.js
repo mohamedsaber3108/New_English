@@ -60,7 +60,7 @@ app.post('/api/leads',async(req,res)=>{
   const lead={reference,createdAt:new Date().toISOString(),name,email,phone,company:clean(b.company,100),kind,language,plan:kind==='subscription'?plan:null,term:kind==='subscription'?term:null,groupSize:kind==='meeting'?Math.min(10000,Math.max(2,Number(b.groupSize)||2)):null,preferredDate:kind==='meeting'?preferredDate:null,preferredTime:kind==='meeting'?preferredTime:null,message:clean(b.message,1500),status:'new'};
   // Leads are persisted in the primary store (JSON or PostgreSQL) so staff can update them and they are backed
   // up with everything else. A legacy LEADS_FILE (JSONL) is imported once by the admin module.
-  try{await customer.mutate(db=>{db.leads.push(lead)});await limiter.consume(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
+  try{await customer.repo.leads.create(await customer.db(),lead);await limiter.consume(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
 });
 app.get('/api/assessment',(_req,res)=>res.json({questions:getAssessment()}));
 app.post('/api/assessment',(req,res)=>res.json(gradeAssessment(req.body.answers||{})));
@@ -83,7 +83,7 @@ wss.on('connection',async(ws,req)=>{
   const code=(u.searchParams.get('code')||'').replace(/[^A-Z0-9]/gi,'').slice(0,8).toUpperCase();
   if(code.length<4){ws.close(1008,'Invalid room');return}
   // Prefer the authenticated account's name; the query parameter is only a fallback for open deployments.
-  let accountName=null;try{const s=customer.currentSession(req,await customer.store());if(s)accountName=s.user.name?.split(/\s+/)[0]}catch{}
+  let accountName=null;try{const s=await customer.sessionFromRequest(req);if(s)accountName=s.user.name?.split(/\s+/)[0]}catch{}
   const name=safeName(accountName||u.searchParams.get('name'));
   const member={id:randomUUID(),name};
   const joined=await hub.join(code,member,ws);
@@ -105,4 +105,23 @@ wss.on('connection',async(ws,req)=>{
 });
 // Liveness: terminate sockets that stop answering pings so they release their room seat.
 const roomPing=setInterval(()=>{for(const ws of wss.clients){if(ws.isAlive===false){ws.terminate();continue}ws.isAlive=false;try{ws.ping()}catch{}}},30000);
-wss.on('close',()=>clearInterval(roomPing));server.listen(port,'0.0.0.0',()=>console.log(`USAM Language listening on ${port}`));
+wss.on('close',()=>clearInterval(roomPing));
+// Open the database (migrations + one-time legacy import) before accepting traffic, so a broken database fails the
+// start instead of the first request. The listener then serves; readiness reflects storage health.
+let shuttingDown=false;
+customer.db().then(()=>server.listen(port,'0.0.0.0',()=>console.log(`USAM Language listening on ${port} (storage: ${customer.storageBackend()})`)))
+  .catch(e=>{console.error(JSON.stringify({level:'fatal',msg:'database unavailable at startup',error:e.message}));process.exit(1)});
+// Graceful shutdown (systemd SIGTERM, Ctrl+C, or an IPC 'shutdown' message from a supervising process/test):
+// stop accepting connections, let in-flight requests finish (max 5 s), close sockets, rooms, limiter and the database.
+async function shutdown(reason){
+  if(shuttingDown)return;shuttingDown=true;
+  console.log(JSON.stringify({level:'info',msg:'shutting down',reason}));
+  const force=setTimeout(()=>process.exit(0),5000);force.unref();
+  try{for(const ws of wss.clients)ws.close(1001,'Server restarting');await new Promise(r=>server.close(()=>r()));}catch{}
+  try{await hub.close()}catch{}
+  try{await limiter.close()}catch{}
+  try{await customer.storageClose()}catch{}
+  process.exit(0);
+}
+process.on('SIGTERM',()=>shutdown('SIGTERM'));process.on('SIGINT',()=>shutdown('SIGINT'));
+process.on('message',m=>{if(m==='shutdown')shutdown('ipc')});
