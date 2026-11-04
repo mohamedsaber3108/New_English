@@ -46,13 +46,53 @@ function chain(db) {
   return db.auditChain;
 }
 
-// Must be called inside storage.mutate(db => ...) so the append is atomic with the action it records.
-export function appendAudit(db, {event, actor = null, target = null, meta = {}}) {
+// Pure: builds the next chained entry after chain state {seq, head}. Used by both the SQL store and the
+// in-memory document helpers below.
+export function makeEntry({seq, head}, {event, actor = null, target = null, meta = {}}) {
+  const key = process.env.AUDIT_HMAC_KEY || null;
+  const entry = {seq: Number(seq) + 1, id: randomUUID(), at: new Date().toISOString(), event: String(event), actor: actor ?? null, target: target ?? null, meta: meta ?? {}, kid: kidOf(key), prevHash: head};
+  entry.hash = digest(entry, key);
+  return entry;
+}
+
+// Incremental verifier: feed chained entries in seq order (page by page for large logs), then finish().
+export function createVerifier(chainState) {
+  const c = chainState || {seq: 0, head: GENESIS, anchorSeq: 0, anchorHash: GENESIS};
+  const ring = keyring();
+  let prev = c.anchorHash, expectSeq = Number(c.anchorSeq) + 1, keyedEntries = 0, unkeyedEntries = 0, checked = 0, broken = null;
+  const base = extra => ({checked, keyed: !!process.env.AUDIT_HMAC_KEY, keyedEntries, unkeyedEntries, ...extra});
+  return {
+    push(e) {
+      if (broken) return false;
+      checked++;
+      if (Number(e.seq) !== expectSeq) { broken = {brokenAt: Number(e.seq), reason: `sequence gap: expected ${expectSeq}, found ${e.seq}`}; return false; }
+      if (e.prevHash !== prev) { broken = {brokenAt: Number(e.seq), reason: 'previous-hash link broken'}; return false; }
+      let key = null;
+      if (e.kid === 'none') {
+        if (keyedEntries > 0) { broken = {brokenAt: Number(e.seq), reason: 'downgrade: unkeyed entry after keyed entries'}; return false; }
+        unkeyedEntries++;
+      } else {
+        key = ring.get(e.kid);
+        if (!key) { broken = {brokenAt: Number(e.seq), reason: `unknown key id ${e.kid ?? '(missing)'}: add the signing key to AUDIT_HMAC_PREVIOUS_KEYS`}; return false; }
+        keyedEntries++;
+      }
+      if (digest(e, key) !== e.hash) { broken = {brokenAt: Number(e.seq), reason: 'entry content does not match its hash'}; return false; }
+      prev = e.hash; expectSeq++;
+      return true;
+    },
+    finish(extra = {}) {
+      if (broken) return base({ok: false, ...broken, ...extra});
+      if (prev !== c.head || expectSeq - 1 !== Number(c.seq)) return base({ok: false, brokenAt: expectSeq, reason: 'chain head mismatch (entries removed from the end)', ...extra});
+      return base({ok: true, head: c.head, seq: Number(c.seq), ...extra});
+    },
+  };
+}
+
+// In-memory document variant (unit tests / legacy). Must be called inside a single atomic update.
+export function appendAudit(db, input) {
   db.auditLog ??= [];
   const c = chain(db);
-  const key = process.env.AUDIT_HMAC_KEY || null;
-  const entry = {seq: c.seq + 1, id: randomUUID(), at: new Date().toISOString(), event: String(event), actor, target, meta, kid: kidOf(key), prevHash: c.head};
-  entry.hash = digest(entry, key);
+  const entry = makeEntry(c, input);
   db.auditLog.push(entry);
   c.seq = entry.seq;
   c.head = entry.hash;
@@ -68,27 +108,9 @@ export function appendAudit(db, {event, actor = null, target = null, meta = {}})
 // Recomputes the whole chain.
 // Returns {ok, checked, legacy, keyed, keyedEntries, unkeyedEntries, head?, seq?, brokenAt?, reason?}.
 export function verifyAudit(db) {
-  const c = db.auditChain || {seq: 0, head: GENESIS, anchorSeq: 0, anchorHash: GENESIS};
-  const ring = keyring();
+  const v = createVerifier(db.auditChain);
   const chained = (db.auditLog || []).filter(x => x.hash);
-  const legacy = (db.auditLog || []).length - chained.length;
-  let prev = c.anchorHash, expectSeq = c.anchorSeq + 1, keyedEntries = 0, unkeyedEntries = 0;
-  const result = extra => ({checked: chained.length, legacy, keyed: !!process.env.AUDIT_HMAC_KEY, keyedEntries, unkeyedEntries, ...extra});
-  for (const e of chained) {
-    if (e.seq !== expectSeq) return result({ok: false, brokenAt: e.seq, reason: `sequence gap: expected ${expectSeq}, found ${e.seq}`});
-    if (e.prevHash !== prev) return result({ok: false, brokenAt: e.seq, reason: 'previous-hash link broken'});
-    let key = null;
-    if (e.kid === 'none') {
-      if (keyedEntries > 0) return result({ok: false, brokenAt: e.seq, reason: 'downgrade: unkeyed entry after keyed entries'});
-      unkeyedEntries++;
-    } else {
-      key = ring.get(e.kid);
-      if (!key) return result({ok: false, brokenAt: e.seq, reason: `unknown key id ${e.kid ?? '(missing)'}: add the signing key to AUDIT_HMAC_PREVIOUS_KEYS`});
-      keyedEntries++;
-    }
-    if (digest(e, key) !== e.hash) return result({ok: false, brokenAt: e.seq, reason: 'entry content does not match its hash'});
-    prev = e.hash; expectSeq++;
-  }
-  if (prev !== c.head || expectSeq - 1 !== c.seq) return result({ok: false, brokenAt: expectSeq, reason: 'chain head mismatch (entries removed from the end)'});
-  return result({ok: true, head: c.head, seq: c.seq});
+  for (const e of chained) if (!v.push(e)) break;
+  return v.finish({checked: chained.length, legacy: (db.auditLog || []).length - chained.length});
 }
+export {GENESIS};

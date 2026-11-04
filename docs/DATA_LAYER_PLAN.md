@@ -46,7 +46,7 @@ inside the caller's transaction. Retention default: keep all (table); `AUDIT_MAX
 ## Steps
 
 1. [x] schema + db/index.js + migrations + tests (migration idempotency, concurrency, constraints)
-2. [ ] repo.js + unit tests on PGlite
+2. [x] repo.js + unit tests on PGlite
 3. [ ] customer.js on repo (auth, sessions, profile, orders, webhook, account deletion)
 4. [ ] operations.js on repo (tokens, preferences, sessions, support, receipts, analytics)
 5. [ ] admin.js on repo (SQL search/filter/pagination/aggregates)
