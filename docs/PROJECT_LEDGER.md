@@ -116,13 +116,13 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | WebSocket shared coordination | TODO | rooms in Node memory (single instance only) |
 | Structured logs / metrics / tracing | TODO | console logging only |
 | Backup / restore | PARTIAL | `scripts/backup.sh` covers customers.json only |
-| Load test + capacity evidence | TODO | none yet |
+| Load test + capacity evidence | PARTIAL | `tests/load/run.mjs` harness + `docs/LOAD_TEST_RESULTS.md` (laptop, not production). Baseline proves the single-document model cannot reach the target (PG rejects >~50k learners; writes 0-3/s at 10k). Re-measure after normalized storage; AWS measurement BLOCKED on infrastructure |
 
 ## 7. Capacity targets (to be validated by load tests — NOT yet measured)
 
 | Metric | Target (proposed) | Measured |
 |---|---|---|
-| Registered accounts | 100,000 | — |
+| Registered accounts | 100,000 | single-document model: fails at ~50k (PG 256 MB JSONB limit); see LOAD_TEST_RESULTS.md |
 | Daily active users | ~15,000 | — |
 | Peak concurrent sessions | ~5,000 | — |
 | Concurrent AI voice sessions | provider-bound | — |

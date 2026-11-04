@@ -45,14 +45,17 @@ function createJsonStorage(dbFile) {
   let state;
   let writes = Promise.resolve();
 
+  let loading = null; // single-flight: concurrent first reads share ONE file load instead of each parsing it
+  let loads = 0;
   async function store() {
     if (!state) {
-      try {
-        state = JSON.parse(await readFile(dbFile, 'utf8'));
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-        state = emptyDocument();
-      }
+      loading ??= (async () => {
+        loads++;
+        try { return JSON.parse(await readFile(dbFile, 'utf8')); }
+        catch (e) { if (e.code !== 'ENOENT') throw e; return emptyDocument(); }
+      })().finally(() => { loading = null; });
+      const loaded = await loading;
+      state ??= loaded;
     }
     return ensureCollections(state);
   }
@@ -78,7 +81,7 @@ function createJsonStorage(dbFile) {
     return {ok: true, backend: 'json', latencyMs: Date.now() - t};
   }
 
-  return {store, mutate, backend: () => 'json', healthCheck, close: async () => {}};
+  return {store, mutate, backend: () => 'json', healthCheck, close: async () => {}, stats: () => ({documentLoads: loads})};
 }
 
 // ---------------------------------------------------------------------------
@@ -124,15 +127,22 @@ function createPostgresStorage(connectionString) {
     return ready;
   }
 
+  let refetching = null; // single-flight: concurrent readers that see a new version share ONE document fetch
+  let loads = 0;
   async function store() {
     await init();
     // Cheap freshness check every read; refetch the document only when another instance has written.
     const v = await pool.query('SELECT version FROM app_state WHERE id = 1');
     const current = Number(v.rows[0]?.version ?? 0);
-    if (!cache || current !== cacheVersion) {
-      const res = await pool.query('SELECT document, version FROM app_state WHERE id = 1');
-      cache = ensureCollections(res.rows[0]?.document || emptyDocument());
-      cacheVersion = Number(res.rows[0]?.version ?? 0);
+    if (!cache || current > cacheVersion) {
+      refetching ??= (async () => {
+        loads++;
+        const res = await pool.query('SELECT document, version FROM app_state WHERE id = 1');
+        const version = Number(res.rows[0]?.version ?? 0);
+        // Never replace a newer cache (e.g. one just set by this instance's own commit) with an older fetch.
+        if (!cache || version > cacheVersion) { cache = ensureCollections(res.rows[0]?.document || emptyDocument()); cacheVersion = version; }
+      })().finally(() => { refetching = null; });
+      await refetching;
     }
     return cache;
   }
@@ -172,7 +182,7 @@ function createPostgresStorage(connectionString) {
 
   async function close() { if (pool) await pool.end(); }
 
-  return {store, mutate, backend: () => 'postgres', healthCheck, close};
+  return {store, mutate, backend: () => 'postgres', healthCheck, close, stats: () => ({documentLoads: loads})};
 }
 
 // ---------------------------------------------------------------------------
