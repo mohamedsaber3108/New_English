@@ -9,6 +9,7 @@
 import {readFile, readdir, mkdir, writeFile, unlink} from 'node:fs/promises';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {log} from '../observability.js';
 
 const MIGRATIONS = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 const MIGRATION_LOCK = 4821337; // arbitrary app-specific advisory lock key
@@ -42,7 +43,7 @@ async function createPg(url) {
     ...(process.env.PGSSL === 'require' ? {ssl: {rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED !== 'false'}} : {}),
   });
   // An idle pooled client can error (DB restart/failover); unhandled, that event would crash the process.
-  pool.on('error', err => console.error(JSON.stringify({level: 'error', msg: 'pg pool idle client error', error: err.message})));
+  pool.on('error', err => log('error', 'pg pool idle client error', {error: err.message}));
   const wrap = c => ({query: (s, p) => c.query(s, p), exec: s => c.query(s)});
   async function tx(fn) {
     const c = await pool.connect();
@@ -65,6 +66,7 @@ async function createPg(url) {
   }
   return {
     backend: 'postgres', applied,
+    stats: () => ({total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount, max: pool.options.max}),
     query: (s, p) => pool.query(s, p),
     tx,
     health: async () => { const t = Date.now(); await pool.query('SELECT 1'); return {ok: true, backend: 'postgres', latencyMs: Date.now() - t}; },
@@ -104,6 +106,7 @@ async function createPglite(dataDir) {
   const applied = await migrate(tx);
   return {
     backend: 'pglite', applied, dataDir,
+    stats: () => ({}),
     query, tx,
     health: async () => { const t = Date.now(); await query('SELECT 1'); return {ok: true, backend: 'pglite', latencyMs: Date.now() - t}; },
     close: async () => { await chain.catch(() => {}); await db.close(); if (lockFile) await unlink(lockFile).catch(() => {}); },

@@ -9,6 +9,7 @@ import {passwordHash, checkPassword, dummyCheck} from './passwords.js';
 import {createDb, pgliteDirFromEnv, isUniqueViolation} from './db/index.js';
 import {autoImport} from './db/legacy-import.js';
 import * as repo from './db/repo.js';
+import {log} from './observability.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const legacyFile = process.env.CUSTOMER_DB_FILE || join(root, 'data', 'customers.json');
@@ -22,7 +23,7 @@ function getDb() {
     const db = await createDb({dataDir: pgliteDirFromEnv(root)});
     backendName = db.backend;
     const r = await autoImport(db, {jsonFile: legacyFile});
-    if (r.imported) console.log(JSON.stringify({level: 'info', msg: 'legacy data imported', source: r.source, counts: r.counts}));
+    if (r.imported) log('info', 'legacy data imported', {source: r.source, counts: r.counts});
     return db;
   })().catch(e => { dbPromise = null; throw e; }); // a failed start (e.g. DB down) is retried on the next request
   return dbPromise;
