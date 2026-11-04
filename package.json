@@ -9,15 +9,18 @@
     "dev:api": "node --watch server/index.js",
     "build": "VITE_STATIC_PREVIEW=true vite build",
     "start": "NODE_ENV=production node server/index.js",
-    "check": "node --check server/index.js && node --check server/engine.js && node --check server/customer.js && node --check server/operations.js && node --check server/storage.js && node --check server/scheduler.js && node --check server/ratelimit.js && node --check server/rooms.js",
+    "check": "node --check server/index.js && node --check server/engine.js && node --check server/customer.js && node --check server/operations.js && node --check server/storage.js && node --check server/scheduler.js && node --check server/ratelimit.js && node --check server/rooms.js && node --check server/admin.js && node --check server/audit.js && node --check server/passwords.js && node --check scripts/create-admin.mjs && node --check scripts/activate-manual.mjs",
+    "admin:create": "node scripts/create-admin.mjs",
+    "admin:activate": "node scripts/activate-manual.mjs",
     "test:api": "node tests/api-smoke.mjs",
     "test:access": "node tests/access-enforcement.mjs",
     "test:unit": "node tests/scheduler.test.mjs",
     "test:engine": "node tests/engine.test.mjs",
     "test:pg": "node tests/storage.pg.test.mjs",
+    "test:admin": "node tests/admin.test.mjs",
     "test:rooms": "node tests/rooms.test.mjs",
     "test:ratelimit": "node tests/ratelimit.test.mjs && node tests/abuse-limits.mjs",
-    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/storage.pg.test.mjs && node tests/multi-instance.mjs"
+    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/audit.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/admin.test.mjs && node tests/storage.pg.test.mjs && node tests/multi-instance.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.7.0",

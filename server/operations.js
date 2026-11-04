@@ -2,6 +2,7 @@ import express from 'express';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomBytes,randomUUID,timingSafeEqual} from 'node:crypto';
+import {appendAudit} from './audit.js';
 
 const token=()=>randomBytes(32).toString('hex');
 const same=(a,b)=>{const x=Buffer.from(String(a)),y=Buffer.from(String(b));return x.length===y.length&&timingSafeEqual(x,y)};
@@ -17,7 +18,8 @@ async function sendEmail({to,subject,body}){
 
 export function operationsRouter(customer,{root}){
   const router=express.Router();
-  const addAudit=(db,event,userId=null,meta={})=>{db.auditLog.push({id:randomUUID(),event,userId,meta,at:nowIso()});db.auditLog=db.auditLog.slice(-2000)};
+  // Learner-side audit events go into the tamper-evident chain (opaque user id only, no PII).
+  const addAudit=(db,event,userId=null,meta={})=>appendAudit(db,{event,actor:userId?{type:'user',id:userId}:null,meta});
   const issue=async(user,purpose)=>{const raw=token(),expires=Date.now()+(purpose==='verify'?24*60*60*1000:30*60*1000);await customer.mutate(db=>{db.securityTokens=db.securityTokens.filter(x=>x.expires>Date.now()&&!(x.userId===user.id&&x.purpose===purpose));db.securityTokens.push({hash:customer.hash(raw),userId:user.id,purpose,expires,createdAt:Date.now()});addAudit(db,`${purpose}_token_issued`,user.id)});return raw};
   const publicOrigin=()=>String(process.env.SITE_ORIGIN||'').replace(/\/$/,'');
 
@@ -37,13 +39,6 @@ export function operationsRouter(customer,{root}){
   router.get('/customer/receipts/:reference',customer.requireUser,async(req,res)=>{const db=await customer.store(),o=db.orders.find(x=>x.reference===req.params.reference&&x.userId===req.customer.id);if(!o)return res.status(404).json({error:'الطلب غير موجود.'});if(o.status!=='paid'&&o.status!=='refunded')return res.status(409).json({error:'الإيصال يظهر بعد تأكيد الدفع.'});res.json({receipt:{reference:o.reference,status:o.status,language:o.language,plan:o.plan,term:o.term,amount:o.amount,currency:'EGP',paidAt:o.paidAt,expiresAt:o.expiresAt,customer:{name:req.customer.name,email:req.customer.email}}})});
   router.post('/events',async(req,res)=>{const name=customer.clean(req.body?.name,60),allowed=['page_view','cta','lesson_start','lesson_complete','checkout_start','support_open','consent'];if(!allowed.includes(name))return res.status(400).json({error:'Invalid event'});const found=customer.currentSession(req,await customer.store());await customer.mutate(db=>{db.analytics??=[];db.analytics.push({id:randomUUID(),name,userId:found?.user?.id||null,path:customer.clean(req.body?.path,120),meta:typeof req.body?.meta==='object'?req.body.meta:{},at:nowIso()});db.analytics=db.analytics.slice(-10000)});res.status(202).json({ok:true})});
 
-  const admin=(req,res,next)=>{const configured=String(process.env.ADMIN_ACCESS_TOKEN||'');const supplied=String(req.get('authorization')||'').replace(/^Bearer\s+/i,'');if(configured.length<32||!same(customer.hash(configured),customer.hash(supplied)))return res.status(401).json({error:'Admin access denied'});next()};
-  router.get('/admin/overview',admin,async(_req,res)=>{const db=await customer.store();res.json({users:db.users.length,verified:db.users.filter(x=>x.emailVerified).length,paidOrders:db.orders.filter(x=>x.status==='paid').length,pendingOrders:db.orders.filter(x=>['pending_contact','pending_payment'].includes(x.status)).length,openTickets:db.supportTickets.filter(x=>x.status==='open').length,activeEntitlements:db.users.reduce((n,u)=>n+Object.values(u.entitlements||{}).filter(e=>e.expiresAt>Date.now()).length,0)})});
-  router.get('/admin/users',admin,async(_req,res)=>{const db=await customer.store();res.json({users:db.users.map(u=>({...customer.publicUser(u),hasProfile:!!u.profile})).slice(-500).reverse()})});
-  router.get('/admin/orders',admin,async(_req,res)=>res.json({orders:[...(await customer.store()).orders].slice(-500).reverse()}));
-  router.get('/admin/support',admin,async(_req,res)=>res.json({tickets:[...(await customer.store()).supportTickets].slice(-500).reverse()}));
-  router.patch('/admin/support/:reference',admin,async(req,res)=>{const status=customer.clean(req.body?.status,20),resolution=customer.clean(req.body?.resolution,800);if(!['open','in_progress','resolved','closed'].includes(status))return res.status(400).json({error:'Invalid status'});let found;await customer.mutate(db=>{found=db.supportTickets.find(x=>x.reference===req.params.reference);if(found){found.status=status;found.resolution=resolution;found.updatedAt=nowIso();addAudit(db,'support_updated',null,{reference:found.reference,status})}});if(!found)return res.status(404).json({error:'Not found'});res.json({ok:true})});
-  router.get('/admin/audit',admin,async(_req,res)=>res.json({events:[...(await customer.store()).auditLog].slice(-500).reverse()}));
-  router.get('/admin/leads',admin,async(_req,res)=>{try{const file=process.env.LEADS_FILE||join(root,'data','leads.jsonl'),rows=(await readFile(file,'utf8')).trim().split('\n').filter(Boolean).slice(-500).reverse().map(x=>JSON.parse(x));res.json({leads:rows})}catch(e){if(e.code==='ENOENT')return res.json({leads:[]});res.status(503).json({error:'Unable to read leads'})}});
+  // Admin APIs live in server/admin.js (individual admin accounts + RBAC). The shared ADMIN_ACCESS_TOKEN routes were removed.
   return router;
 }

@@ -4,11 +4,11 @@ import {createServer} from 'node:http';
 import {WebSocketServer} from 'ws';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {mkdir,appendFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import {customerRouter} from './customer.js';
 import {createRateLimiter} from './ratelimit.js';
 import {createRoomHub} from './rooms.js';
+import {adminRouter} from './admin.js';
 import {operationsRouter} from './operations.js';
 import {getAssessment,gradeAssessment,assessText,nextActivity,simulationTurn,reportSession,packs} from './engine.js';
 const app=express();app.set('trust proxy','loopback');const server=createServer(app);const root=join(dirname(fileURLToPath(import.meta.url)),'..');const port=Number(process.env.PORT||4100);
@@ -20,6 +20,18 @@ const customer=customerRouter();
 app.use('/api',(req,res,next)=>{if(['GET','HEAD','OPTIONS'].includes(req.method))return next();const origin=req.get('origin');if(origin&&origin!==`${req.protocol}://${req.get('host')}`)return res.status(403).json({error:'Invalid origin'});next()});
 app.use('/api',customer.router);
 app.use('/api',operationsRouter(customer,{root}));
+// Admin operations (individual accounts + RBAC). Integration status reports only whether a provider is
+// configured, never the secret itself.
+app.use('/api',adminRouter(customer,{root,leadsFile:process.env.LEADS_FILE||join(root,'data','leads.jsonl'),integrations:()=>({
+  storage:customer.storageBackend(),
+  payments:customer.paymentEnabled()?'configured':'awaiting credentials',
+  email:process.env.RESEND_API_KEY&&process.env.EMAIL_FROM?'configured':'awaiting credentials',
+  ai:process.env.OPENAI_API_KEY?'configured':'awaiting credentials',
+  rateLimit:limiter.status().backend,
+  rooms:hub.status().backend,
+  auditKeyed:!!process.env.AUDIT_HMAC_KEY,
+  accessEnforcement:customer.enforcementEnabled()?'enforced':'open',
+})}));
 // Paid-content gate. Access enforcement is INDEPENDENT of payment-provider configuration (fail closed).
 // Only ACCESS_ENFORCEMENT=open serves learning content without an entitlement; the absence of Paymob keys never opens it.
 const paid=(tier='essential')=>(req,res,next)=>{if(!customer.enforcementEnabled())return next();return customer.requireUser(req,res,()=>customer.active(req.customer,'English',tier)?next():res.status(402).json({error:'اشتراك الإنجليزية غير نشط. افتح صفحة حسابك لاختيار باقة.'}))};
@@ -46,7 +58,9 @@ app.post('/api/leads',async(req,res)=>{
   if(kind==='meeting'&&(!/^\d{4}-\d{2}-\d{2}$/.test(preferredDate)||preferredDate<todayCairo()||!['10:00','12:00','15:00','17:00'].includes(preferredTime)))return res.status(400).json({error:'اختار تاريخًا ووقتًا مفضلًا صالحين.'});
   const reference='UL-'+randomUUID().slice(0,8).toUpperCase();
   const lead={reference,createdAt:new Date().toISOString(),name,email,phone,company:clean(b.company,100),kind,language,plan:kind==='subscription'?plan:null,term:kind==='subscription'?term:null,groupSize:kind==='meeting'?Math.min(10000,Math.max(2,Number(b.groupSize)||2)):null,preferredDate:kind==='meeting'?preferredDate:null,preferredTime:kind==='meeting'?preferredTime:null,message:clean(b.message,1500),status:'new'};
-  try{const file=process.env.LEADS_FILE||join(root,'data','leads.jsonl');await mkdir(dirname(file),{recursive:true});await appendFile(file,JSON.stringify(lead)+'\n',{mode:0o600});await limiter.consume(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
+  // Leads are persisted in the primary store (JSON or PostgreSQL) so staff can update them and they are backed
+  // up with everything else. A legacy LEADS_FILE (JSONL) is imported once by the admin module.
+  try{await customer.mutate(db=>{db.leads.push(lead)});await limiter.consume(`lead:${ip}`,LEAD_LIMIT,LEAD_WINDOW);res.status(201).json({ok:true,reference,message:'Request received. Meeting time requires confirmation.'})}catch{res.status(503).json({error:'تعذر حفظ الطلب الآن. حاول لاحقًا.'})}
 });
 app.get('/api/assessment',(_req,res)=>res.json({questions:getAssessment()}));
 app.post('/api/assessment',(req,res)=>res.json(gradeAssessment(req.body.answers||{})));

@@ -27,10 +27,10 @@ import {readFile, writeFile, mkdir, rename, chmod} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
-const COLLECTIONS = ['users', 'sessions', 'orders', 'supportTickets', 'securityTokens', 'auditLog', 'analytics'];
+const COLLECTIONS = ['users', 'sessions', 'orders', 'supportTickets', 'securityTokens', 'auditLog', 'analytics', 'leads', 'admins', 'adminSessions'];
 
 function emptyDocument() {
-  return {users: [], sessions: [], orders: [], supportTickets: [], securityTokens: [], auditLog: [], analytics: []};
+  return Object.fromEntries(COLLECTIONS.map(k => [k, []]));
 }
 
 function ensureCollections(doc) {

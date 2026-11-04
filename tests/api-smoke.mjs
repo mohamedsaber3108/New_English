@@ -25,7 +25,8 @@ if((await call('/api/customer/support',{method:'POST',body:{category:'technical'
 const cat=await call('/api/customer/catalog');if(!cat.r.ok)throw Error('catalog');if(cat.data.prices?.essential?.monthly!==300||cat.data.prices?.essential?.yearly!==3000||cat.data.prices?.plus?.monthly!==450||cat.data.prices?.plus?.yearly!==4500)throw Error('catalog prices (server is the source of truth) changed unexpectedly: '+JSON.stringify(cat.data.prices));
 if((await call('/api/customer/orders',{method:'POST',body:{plan:'essential',term:'monthly',language:'English'}})).r.status!==201)throw Error('order');
 if((await call('/api/admin/overview')).r.status!==401)throw Error('admin deny');
-if(!(await call('/api/admin/overview',{auth:admin})).r.ok)throw Error('admin allow');
+// The shared admin token is disabled by default (individual admin accounts replace it; see tests/admin.test.mjs).
+if((await call('/api/admin/overview',{auth:admin})).r.status!==401)throw Error('shared admin token must be rejected unless ADMIN_LEGACY_TOKEN=true');
 if(!(await call('/api/customer/logout',{method:'POST'})).r.ok)throw Error('logout');
 if((await call('/api/customer/me')).r.status!==401)throw Error('logout session');
 console.log('API smoke test passed');
