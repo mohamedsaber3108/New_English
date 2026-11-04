@@ -1,6 +1,7 @@
 [Unit]
 Description=USAM Language web application
-After=network-online.target
+# Local PostgreSQL is optional (managed RDS is recommended); "Wants" does not fail if the unit does not exist.
+After=network-online.target postgresql.service
 Wants=network-online.target
 
 [Service]
@@ -10,12 +11,16 @@ Group=usam-language
 WorkingDirectory=/opt/usam-language
 EnvironmentFile=/etc/usam-language.env
 ExecStart=/usr/bin/node server/index.js
+# Graceful shutdown: the app drains in-flight requests (max 5 s), closes WebSockets and the database on SIGTERM.
+KillSignal=SIGTERM
+TimeoutStopSec=15
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+# Needed only for the embedded PGlite data directory / legacy import files; harmless with DATABASE_URL.
 ReadWritePaths=/var/lib/usam-language
 
 [Install]

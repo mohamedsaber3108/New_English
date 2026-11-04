@@ -115,7 +115,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Load balancer + health/readiness | PARTIAL | `/api/health` exists; no readiness split, no LB config |
 | WebSocket shared coordination | TODO | rooms in Node memory (single instance only) |
 | Structured logs / metrics / tracing | TODO | console logging only |
-| Backup / restore | PARTIAL | `scripts/backup.sh` covers customers.json only |
+| Backup / restore | DONE (local) | `scripts/backup.sh` (pg_dump + validated archive + SHA-256 + retention + optional S3) and `scripts/restore.sh` (checksum check, confirm flag, single transaction); systemd timer; drill `tests/backup-restore.test.mjs` 15/15 on Linux/PG16 (app works on the restored DB, audit chain verifies). Repeat on AWS/RDS: BLOCKED on infrastructure. Runbook: docs/BACKUP_RESTORE.md |
 | Load test + capacity evidence | PARTIAL | Baseline 2 (laptop): 100,000 learners on PostgreSQL, ~2,200 reads/s and ~1,450 writes/s from one process, p99 21-53 ms, 0 failures; throughput independent of data size. Production capacity (multi-instance, RDS, AWS network) BLOCKED on infrastructure |
 
 ## 7. Capacity targets (to be validated by load tests — NOT yet measured)
