@@ -1,0 +1,518 @@
+{
+  "machine": {
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900H",
+    "cores": 20,
+    "ramGB": 15.7,
+    "os": "win32 10.0.26300",
+    "node": "v26.7.0",
+    "note": "generator, app server and database on the same machine; PostgreSQL 16 and Redis 7 in local Docker containers"
+  },
+  "durationMs": 5000,
+  "connections": 30,
+  "results": [
+    {
+      "backend": "pglite",
+      "size": 1000,
+      "scenario": "health",
+      "startupMs": 1487,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 26029,
+      "rps": 5201,
+      "p50": 5.5,
+      "p90": 7.4,
+      "p99": 9.9,
+      "max": 22.7,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 26029
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 1000,
+      "scenario": "read",
+      "startupMs": 1487,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 3280,
+      "rps": 652,
+      "p50": 44.9,
+      "p90": 61.9,
+      "p99": 78.2,
+      "max": 83.7,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 3280
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 1000,
+      "scenario": "write",
+      "startupMs": 1487,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 3514,
+      "rps": 698,
+      "p50": 26,
+      "p90": 39,
+      "p99": 58.7,
+      "max": 70.4,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 3514
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 1000,
+      "scenario": "mixed",
+      "startupMs": 1487,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 4979,
+      "rps": 990,
+      "p50": 28.5,
+      "p90": 39.8,
+      "p99": 58.7,
+      "max": 69.7,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 4979
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 10000,
+      "scenario": "health",
+      "startupMs": 1378,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 27764,
+      "rps": 5549,
+      "p50": 5.2,
+      "p90": 6.9,
+      "p99": 8.9,
+      "max": 12.1,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 27764
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 10000,
+      "scenario": "read",
+      "startupMs": 1378,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 4191,
+      "rps": 833,
+      "p50": 34.5,
+      "p90": 46.5,
+      "p99": 63.5,
+      "max": 67.1,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 4191
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 10000,
+      "scenario": "write",
+      "startupMs": 1378,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 3046,
+      "rps": 607,
+      "p50": 29.8,
+      "p90": 45.1,
+      "p99": 73.8,
+      "max": 76.5,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 3046
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 10000,
+      "scenario": "mixed",
+      "startupMs": 1378,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 4514,
+      "rps": 895,
+      "p50": 30.1,
+      "p90": 43.6,
+      "p99": 76.8,
+      "max": 109,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 4514
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 50000,
+      "scenario": "health",
+      "startupMs": 3818,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 30409,
+      "rps": 6079,
+      "p50": 3.9,
+      "p90": 5.4,
+      "p99": 8,
+      "max": 752.6,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 30409
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 50000,
+      "scenario": "read",
+      "startupMs": 3818,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 1725,
+      "rps": 343,
+      "p50": 56.4,
+      "p90": 99.4,
+      "p99": 1242.6,
+      "max": 1996.3,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 1725
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 50000,
+      "scenario": "write",
+      "startupMs": 3818,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 3246,
+      "rps": 646,
+      "p50": 29.7,
+      "p90": 37,
+      "p99": 56,
+      "max": 59.6,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 3246
+      }
+    },
+    {
+      "backend": "pglite",
+      "size": 50000,
+      "scenario": "mixed",
+      "startupMs": 3818,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 3936,
+      "rps": 783,
+      "p50": 35.5,
+      "p90": 52,
+      "p99": 69.5,
+      "max": 84.8,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 3936
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 1000,
+      "scenario": "health",
+      "startupMs": 710,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 32254,
+      "rps": 6446,
+      "p50": 4.2,
+      "p90": 5.8,
+      "p99": 11,
+      "max": 53.2,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 32254
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 1000,
+      "scenario": "read",
+      "startupMs": 710,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 11387,
+      "rps": 2272,
+      "p50": 12.8,
+      "p90": 16.1,
+      "p99": 20.7,
+      "max": 28.2,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 11387
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 1000,
+      "scenario": "write",
+      "startupMs": 710,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 7661,
+      "rps": 1529,
+      "p50": 12.7,
+      "p90": 15.4,
+      "p99": 19.6,
+      "max": 24.6,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 7661
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 1000,
+      "scenario": "mixed",
+      "startupMs": 710,
+      "docMB": 4.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 11398,
+      "rps": 2274,
+      "p50": 12.3,
+      "p90": 17.8,
+      "p99": 23.7,
+      "max": 30.9,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 11398
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 10000,
+      "scenario": "health",
+      "startupMs": 709,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 35114,
+      "rps": 7019,
+      "p50": 4.1,
+      "p90": 5.5,
+      "p99": 7.9,
+      "max": 13.9,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 35114
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 10000,
+      "scenario": "read",
+      "startupMs": 709,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 11391,
+      "rps": 2274,
+      "p50": 12.5,
+      "p90": 16,
+      "p99": 24.1,
+      "max": 43.9,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 11391
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 10000,
+      "scenario": "write",
+      "startupMs": 709,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 6033,
+      "rps": 1204,
+      "p50": 14.3,
+      "p90": 19.5,
+      "p99": 71.1,
+      "max": 118.3,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 6033
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 10000,
+      "scenario": "mixed",
+      "startupMs": 709,
+      "docMB": 42.2,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 11530,
+      "rps": 2300,
+      "p50": 11.9,
+      "p90": 17.7,
+      "p99": 26.6,
+      "max": 45.6,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 11530
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 50000,
+      "scenario": "health",
+      "startupMs": 927,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 35597,
+      "rps": 7114,
+      "p50": 4.1,
+      "p90": 5.3,
+      "p99": 6.9,
+      "max": 21.4,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 35597
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 50000,
+      "scenario": "read",
+      "startupMs": 927,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 11000,
+      "rps": 2196,
+      "p50": 13.1,
+      "p90": 16.6,
+      "p99": 24.8,
+      "max": 47.4,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 11000
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 50000,
+      "scenario": "write",
+      "startupMs": 927,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 6868,
+      "rps": 1371,
+      "p50": 14.1,
+      "p90": 17.2,
+      "p99": 21.4,
+      "max": 42.5,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 6868
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 50000,
+      "scenario": "mixed",
+      "startupMs": 927,
+      "docMB": 211.4,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 10297,
+      "rps": 2046,
+      "p50": 12.2,
+      "p90": 20.9,
+      "p99": 44.6,
+      "max": 86,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 10297
+      }
+    }
+  ]
+}

@@ -55,7 +55,56 @@ Raw data: `tests/load/results/2026-11-04T10-37-06-162Z.json`.
 
 ### Decision
 
-The single-document model is retired as the production data architecture. Next phase: per-entity relational tables
-(users, sessions, orders, entitlements, support tickets, leads, admins, admin sessions, audit) with indexes and
-row-level writes, accessed through a repository layer; JSON kept for development. The same harness will be re-run
-against it and the results added below as "Baseline 2".
+The single-document model is retired as the production data architecture (see `docs/DATA_LAYER_PLAN.md`):
+per-entity relational tables with indexes and row-level transactional writes, PostgreSQL in production and
+embedded PGlite for development/tests.
+
+## Baseline 2 — relational storage (commit 7319c90), 2026-11-04
+
+Same harness, machine, scenarios and settings as Baseline 1 (5 s, 30 connections, 20 for write). Every row below:
+0 errors, 0 non-2xx.
+
+| Backend | Learners | Data | Scenario | req/s | p50 ms | p99 ms |
+|---|---:|---:|---|---:|---:|---:|
+| PostgreSQL 16 | 1,000 | 4.2 MB | read | 2,272 | 12.8 | 20.7 |
+| | | | write | 1,529 | 12.7 | 19.6 |
+| | | | mixed | 2,274 | 12.3 | 23.7 |
+| PostgreSQL 16 | 10,000 | 42.2 MB | read | 2,274 | 12.5 | 24.1 |
+| | | | write | 1,204 | 14.3 | 71.1 |
+| | | | mixed | 2,300 | 11.9 | 26.6 |
+| PostgreSQL 16 | 50,000 | 211 MB | read | 2,196 | 13.1 | 24.8 |
+| | | | write | 1,371 | 14.1 | 21.4 |
+| | | | mixed | 2,046 | 12.2 | 44.6 |
+| **PostgreSQL 16** | **100,000** | **423 MB** | read | 2,179 | 12.8 | 28.6 |
+| | | | write | 1,451 | 13.4 | 20.9 |
+| | | | mixed | 1,888 | 13.1 | 53.1 |
+| PGlite (dev engine) | 1,000 | 4.2 MB | read / write / mixed | 652 / 698 / 990 | 45 / 26 / 29 | 78 / 59 / 59 |
+| PGlite (dev engine) | 10,000 | 42.2 MB | read / write / mixed | 833 / 607 / 895 | 35 / 30 / 30 | 64 / 74 / 77 |
+| PGlite (dev engine) | 50,000 | 211 MB | read / write / mixed | 343 / 646 / 783 | 56 / 30 / 36 | 1,243 / 56 / 70 |
+
+Raw data: `tests/load/results/2026-11-04T13-38-18-719Z.json` (1k–50k) and `...13-39-19-205Z.json` (100k).
+
+### Before / after (PostgreSQL)
+
+| Learners | Writes/s before → after | Write p50 before → after | Reads/s before → after |
+|---:|---|---|---|
+| 1,000 | 3 → **1,529** | 6.0 s → **12.7 ms** | 2,486 → 2,272 |
+| 10,000 | 0 → **1,204** | 33.6 s → **14.3 ms** | 995 → **2,274** |
+| 50,000 | data set rejected → **1,371** | — → **14.1 ms** | — → **2,196** |
+| 100,000 | not attempted (impossible) → **1,451** | — → **13.4 ms** | — → **2,179** |
+
+### What this proves — and what it does not
+
+- **Proven (on this laptop):** throughput and latency no longer depend on how many learners are stored. A database
+  holding 100,000 learners serves ~2,200 authenticated reads/s and ~1,450 progress writes/s at p99 ≈ 21–53 ms from
+  **one** Node process, with zero failed requests. The structural blocker to the 100,000-registered-user target is
+  removed.
+- **Not proven:** production capacity. This was one app process, one laptop, the load generator competing for the
+  same CPU, and PostgreSQL in Docker on the same machine. It does not measure concurrent users (requests/s is not
+  users), AI/voice workloads, multiple app instances behind a load balancer, network latency, or managed-database
+  limits (RDS connections, IOPS). Those require the AWS environment (BLOCKED: infrastructure not provisioned).
+- **PGlite** is the development/test engine (single process, WASM). Its numbers are shown for completeness; it is not
+  a production option (the server refuses a second process on the same data directory).
+- **Rough sizing, not a measurement:** if an active learner averages one request every 10 s while practising, 2,000
+  req/s from a single instance corresponds to ~20,000 learners active at the same moment. Verify on staging before
+  relying on this.

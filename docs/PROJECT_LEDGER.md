@@ -105,7 +105,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 
 | Item | Status | Notes |
 |---|---|---|
-| Storage | DONE (document model) | `server/storage.js` adapter: JSON (default) or PostgreSQL via DATABASE_URL. PG uses row-locked txns, pooling, survives restart, shared across instances. Verified by `tests/storage.pg.test.mjs` + full app smoke/access run against real PG 16 (Docker). NEXT: normalized per-entity tables for write-concurrency at the top of the 100k range (contract unchanged). |
+| Storage | DONE | Relational schema (13 tables, migrations, constraints, indexes) via `server/db`: PostgreSQL in production, embedded PGlite for dev/tests; row-level transactional writes; automatic one-time import of the legacy document; graceful shutdown. Tests: db (22), repo (57), legacy-import (25) on both engines |
 | Shared rate limiting (Redis) | DONE | API (120/min/IP), auth, leads all Redis-backed when REDIS_URL set; verified vs real Redis 7 |
 | Sessions across instances | DONE (fixed) | sessions live in storage. A stale-cache bug made sessions created on one instance invisible on another; fixed with a version check (commit c0d80f1) and proven by `tests/multi-instance.mjs` |
 | WebSocket room coordination across instances | DONE | `server/rooms.js`: Redis hash membership + atomic Lua join (4-cap holds globally), pub/sub fan-out, heartbeats prune crashed-instance ghosts; memory fallback. Proven by `tests/rooms.test.mjs` (2 instances: cross-instance message + global cap) |
@@ -116,13 +116,13 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | WebSocket shared coordination | TODO | rooms in Node memory (single instance only) |
 | Structured logs / metrics / tracing | TODO | console logging only |
 | Backup / restore | PARTIAL | `scripts/backup.sh` covers customers.json only |
-| Load test + capacity evidence | PARTIAL | `tests/load/run.mjs` harness + `docs/LOAD_TEST_RESULTS.md` (laptop, not production). Baseline proves the single-document model cannot reach the target (PG rejects >~50k learners; writes 0-3/s at 10k). Re-measure after normalized storage; AWS measurement BLOCKED on infrastructure |
+| Load test + capacity evidence | PARTIAL | Baseline 2 (laptop): 100,000 learners on PostgreSQL, ~2,200 reads/s and ~1,450 writes/s from one process, p99 21-53 ms, 0 failures; throughput independent of data size. Production capacity (multi-instance, RDS, AWS network) BLOCKED on infrastructure |
 
 ## 7. Capacity targets (to be validated by load tests — NOT yet measured)
 
 | Metric | Target (proposed) | Measured |
 |---|---|---|
-| Registered accounts | 100,000 | single-document model: fails at ~50k (PG 256 MB JSONB limit); see LOAD_TEST_RESULTS.md |
+| Registered accounts | 100,000 | 100,000 stored and served on PostgreSQL in the laptop load test (not a production measurement) |
 | Daily active users | ~15,000 | — |
 | Peak concurrent sessions | ~5,000 | — |
 | Concurrent AI voice sessions | provider-bound | — |

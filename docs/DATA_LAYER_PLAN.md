@@ -1,6 +1,6 @@
 # Data Layer Migration Plan (single document -> relational tables)
 
-Status: steps 1-9 DONE (commit after 158e827); step 10 (load-test Baseline 2) next. Driver: `docs/LOAD_TEST_RESULTS.md` Baseline 1 (document model fails before 50k learners).
+Status: DONE. All steps complete; results in docs/LOAD_TEST_RESULTS.md (Baseline 2). Driver: `docs/LOAD_TEST_RESULTS.md` Baseline 1 (document model fails before 50k learners).
 
 ## Decision
 
@@ -54,4 +54,4 @@ inside the caller's transaction. Retention default: keep all (table); `AUDIT_MAX
 7. [x] legacy import + test (JSON doc and app_state)
 8. [x] port tests that touched the document directly (tamper test, MFA sealed-secret check, storage tests)
 9. [x] full regression default (PGlite) + PG16 + Redis, E2E, builds
-10. [ ] load test Baseline 2, docs, ledger
+10. [x] load test Baseline 2, docs, ledger

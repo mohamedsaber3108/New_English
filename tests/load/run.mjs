@@ -19,12 +19,12 @@ import {join} from 'node:path';
 import {randomBytes, randomUUID, createHash} from 'node:crypto';
 import {freePort} from '../helpers.mjs';
 import {runLoad} from './loadgen.mjs';
-import {createStorage} from '../../server/storage.js';
+import {createDb} from '../../server/db/index.js';
 import {passwordHash} from '../../server/passwords.js';
 
 const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > 0 ? process.argv[i + 1] : d; };
 const SIZES = arg('sizes', '1000,10000,50000').split(',').map(Number);
-const BACKENDS = arg('backends', process.env.DATABASE_URL ? 'json,pg' : 'json').split(',');
+const BACKENDS = arg('backends', process.env.DATABASE_URL ? 'pglite,pg' : 'pglite').split(',');
 const DURATION = Number(arg('duration', 10000)), CONNECTIONS = Number(arg('connections', 50));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const sha = v => createHash('sha256').update(v).digest('hex');
@@ -42,7 +42,7 @@ function learner(i, pw, now) {
   };
 }
 
-async function seed(storage, n) {
+async function seed(db, n) {
   const now = Date.now(), pw = await passwordHash('load-test-password-1234'), tokens = [];
   const users = [], sessions = [];
   for (let i = 0; i < n; i++) {
@@ -50,8 +50,24 @@ async function seed(storage, n) {
     const t = randomBytes(32).toString('hex'); tokens.push(t);
     sessions.push({id: randomUUID(), hash: sha(t), userId: u.id, createdAt: now, lastSeen: now, device: 'load', expires: now + 30 * 864e5});
   }
-  let bytes = 0;
-  await storage.mutate(db => { db.users = users; db.sessions = sessions; bytes = Buffer.byteLength(JSON.stringify(db)); });
+  // Batched inserts (2,000 rows per statement) into the relational tables; entitlements as their own rows.
+  const B = 2000;
+  for (let i = 0; i < users.length; i += B) {
+    const chunk = users.slice(i, i + B);
+    await db.query(`INSERT INTO users (id, email, name, phone, password, status, email_verified, preferences, profile, created_at)
+      SELECT id, email, name, phone, password, 'active', email_verified, preferences, profile, created_at::timestamptz
+      FROM jsonb_to_recordset($1::jsonb) AS x(id text, email text, name text, phone text, password text, email_verified boolean, preferences jsonb, profile jsonb, created_at text)`,
+      [JSON.stringify(chunk.map(u => ({id: u.id, email: u.email, name: u.name, phone: u.phone, password: u.password, email_verified: u.emailVerified, preferences: u.preferences, profile: u.profile, created_at: u.createdAt})))]);
+    const ents = chunk.filter(u => u.entitlements.English).map(u => ({user_id: u.id, plan: u.entitlements.English.plan, expires_at: u.entitlements.English.expiresAt, order_reference: u.entitlements.English.orderReference}));
+    if (ents.length) await db.query(`INSERT INTO entitlements (user_id, language, plan, expires_at, order_reference) SELECT user_id, 'English', plan, expires_at, order_reference FROM jsonb_to_recordset($1::jsonb) AS x(user_id text, plan text, expires_at bigint, order_reference text)`, [JSON.stringify(ents)]);
+  }
+  for (let i = 0; i < sessions.length; i += B) {
+    await db.query(`INSERT INTO sessions (id, hash, user_id, created_at, last_seen, device, expires) SELECT id, hash, user_id, created_at, last_seen, device, expires
+      FROM jsonb_to_recordset($1::jsonb) AS x(id text, hash text, user_id text, created_at bigint, last_seen bigint, device text, expires bigint)`,
+      [JSON.stringify(sessions.slice(i, i + B).map(s => ({id: s.id, hash: s.hash, user_id: s.userId, created_at: s.createdAt, last_seen: s.lastSeen, device: s.device, expires: s.expires})))]);
+  }
+  // Logical data size, for comparison with Baseline 1 (where every write re-serialized all of it).
+  const bytes = Buffer.byteLength(JSON.stringify(users)) + Buffer.byteLength(JSON.stringify(sessions));
   return {tokens, bytes};
 }
 
@@ -77,7 +93,7 @@ if (BACKENDS.includes('pg')) {
 
 for (const backend of BACKENDS) for (const size of SIZES) {
   const dir = await mkdtemp(join(tmpdir(), 'usam-load-'));
-  let env = {...env0, CUSTOMER_DB_FILE: join(dir, 'db.json'), LEADS_FILE: join(dir, 'l.jsonl'), DATABASE_URL: ''};
+  let env = {...env0, CUSTOMER_DB_FILE: join(dir, 'db.json'), PGLITE_DATA_DIR: join(dir, 'pglite'), LEADS_FILE: join(dir, 'l.jsonl'), DATABASE_URL: ''};
   let dbName = null;
   if (backend === 'pg') {
     dbName = `usam_load_${size}_${Date.now()}`;
@@ -85,7 +101,7 @@ for (const backend of BACKENDS) for (const size of SIZES) {
     const u = new URL(process.env.DATABASE_URL); u.pathname = '/' + dbName; env.DATABASE_URL = u.toString();
   }
   // Pass DATABASE_URL through as-is: '' must mean "JSON file", never fall back to the shell's DATABASE_URL.
-  const storage = createStorage({dbFile: env.CUSTOMER_DB_FILE, databaseUrl: env.DATABASE_URL});
+  const storage = await createDb({databaseUrl: env.DATABASE_URL, dataDir: env.PGLITE_DATA_DIR}); // runs migrations
   const t = Date.now();
   let tokens, docBytes;
   try { ({tokens, bytes: docBytes} = await seed(storage, size)); } // serialized size of the whole application document

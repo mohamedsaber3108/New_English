@@ -1,0 +1,98 @@
+{
+  "machine": {
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900H",
+    "cores": 20,
+    "ramGB": 15.7,
+    "os": "win32 10.0.26300",
+    "node": "v26.7.0",
+    "note": "generator, app server and database on the same machine; PostgreSQL 16 and Redis 7 in local Docker containers"
+  },
+  "durationMs": 5000,
+  "connections": 30,
+  "results": [
+    {
+      "backend": "pg",
+      "size": 100000,
+      "scenario": "health",
+      "startupMs": 4678,
+      "docMB": 422.8,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 37739,
+      "rps": 7542,
+      "p50": 3.7,
+      "p90": 5.1,
+      "p99": 8.4,
+      "max": 15.6,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 37739
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 100000,
+      "scenario": "read",
+      "startupMs": 4678,
+      "docMB": 422.8,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 10931,
+      "rps": 2179,
+      "p50": 12.8,
+      "p90": 17.6,
+      "p99": 28.6,
+      "max": 39,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 10931
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 100000,
+      "scenario": "write",
+      "startupMs": 4678,
+      "docMB": 422.8,
+      "valid": true,
+      "connections": 20,
+      "seconds": 5,
+      "requests": 7266,
+      "rps": 1451,
+      "p50": 13.4,
+      "p90": 16.1,
+      "p99": 20.9,
+      "max": 32.1,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 7266
+      }
+    },
+    {
+      "backend": "pg",
+      "size": 100000,
+      "scenario": "mixed",
+      "startupMs": 4678,
+      "docMB": 422.8,
+      "valid": true,
+      "connections": 30,
+      "seconds": 5,
+      "requests": 9465,
+      "rps": 1888,
+      "p50": 13.1,
+      "p90": 22.9,
+      "p99": 53.1,
+      "max": 95.4,
+      "errors": 0,
+      "non2xx": 0,
+      "codes": {
+        "200": 9465
+      }
+    }
+  ]
+}
