@@ -66,23 +66,43 @@ credential to function · **Guard** = access-gated by `paid()` (entitlement requ
 | `/api/coach` | POST | `Coach` | live AI tutor | Cfg (OpenAI) · Guard (plus) |
 | `/api/rooms` (WS) | WebSocket | `Group` | group text room (≤4) | Live · Guard |
 
-## Admin (`operations.js`, bearer-gated)
+## Admin (`admin.js`, individual accounts + RBAC; UI `Admin.jsx`)
 
-| Backend route | Method | Frontend caller | Purpose | Status |
+All routes require an admin session cookie (`usam_admin`, Path=/api/admin) and the listed permission. Every write is
+recorded in the tamper-evident audit chain. Tests: `tests/admin.test.mjs` (API), `tests/e2e/admin.e2e.mjs` (browser).
+
+| Backend route | Method | Permission | Frontend caller | Status |
 |---|---|---|---|---|
-| `/api/admin/overview` | GET | `AdminPortal` | KPIs | Live |
-| `/api/admin/users` | GET | `AdminPortal` | user list | Live |
-| `/api/admin/orders` | GET | `AdminPortal` | order list | Live |
-| `/api/admin/support` | GET | `AdminPortal` | ticket list | Live |
-| `/api/admin/support/:reference` | PATCH | `AdminPortal` | update ticket | Live |
-| `/api/admin/audit` | GET | `AdminPortal` | audit log | Live |
-| `/api/admin/leads` | GET | `AdminPortal` | lead list | Live |
+| `/api/admin/auth/login` | POST | — (throttled) | `SignIn` | Live |
+| `/api/admin/auth/logout` | POST | session | console header | Live |
+| `/api/admin/auth/me` | GET | session | `AdminConsole` (session check) | Live |
+| `/api/admin/auth/password` | POST | session | `PasswordPanel` | Live |
+| `/api/admin/overview` | GET | dashboard.read | `Overview` (KPIs + integration status) | Live |
+| `/api/admin/users` | GET | users.read | `UsersScreen` (q, status, subscription, verified, page) | Live |
+| `/api/admin/users/:id` | GET | users.read | `UsersScreen` detail | Live |
+| `/api/admin/users/:id/status` | PATCH | users.write | suspend / reactivate | Live |
+| `/api/admin/users/:id/revoke-sessions` | POST | users.write | end all sessions | Live |
+| `/api/admin/users/:id/verify-email` | POST | users.write | mark email verified | Live |
+| `/api/admin/users/:id/entitlements` | POST | orders.write | grant manual entitlement | Live |
+| `/api/admin/users/:id/entitlements/English` | DELETE | orders.write | revoke entitlement | Live |
+| `/api/admin/orders` | GET | orders.read | `OrdersScreen` (q, status, plan, page) | Live |
+| `/api/admin/orders/:reference/activate` | POST | orders.write | manual payment activation | Live |
+| `/api/admin/orders/:reference/refund` | POST | orders.write | record refund (no money movement) | Live |
+| `/api/admin/support` | GET | support.read | `SupportScreen` (q, status, category, page) | Live |
+| `/api/admin/support/:reference` | PATCH | support.write | status + resolution | Live |
+| `/api/admin/leads` | GET | leads.read | `LeadsScreen` (q, status, kind, page) | Live |
+| `/api/admin/leads/:reference` | PATCH | leads.write | status + note | Live |
+| `/api/admin/audit` | GET | audit.read | `AuditScreen` (q, event, actorType, page) | Live |
+| `/api/admin/audit/verify` | GET | audit.read | "verify chain" button | Live |
+| `/api/admin/roles` | GET | admins.read | permission matrix | Live |
+| `/api/admin/admins` | GET/POST | admins.read / admins.write | `AdminsScreen` list + create | Live |
+| `/api/admin/admins/:id` | PATCH | admins.write | change role / disable | Live |
 
 ## Gaps identified (tracked in PROJECT_LEDGER.md)
 
 - Account/profile **edit** (name/phone) and **change password**: DONE. Email change (re-verify) deferred.
 - Receipt/invoice **printable** page: API exists; UI is an `alert()` (PARTIAL).
-- Admin **operations UI**: currently a raw JSON viewer, not an operational dashboard (TODO).
-- Admin **RBAC/MFA**: single shared bearer token (PARTIAL — security).
-- Lead/meeting **management** actions (status update, calendar): read-only today (TODO).
-- Rate limiters and WS rooms are **in-memory** (single-instance only) — need shared coordination for scale (TODO).
+- Admin operations UI, RBAC, lead management: DONE. Admin **MFA (TOTP)**: TODO.
+- Calendar booking for meeting leads: TODO (leads record a preferred time; staff confirm manually).
+- Rate limiting and rooms are Redis-shared when `REDIS_URL` is set (DONE).
+- Core data is still a single document per deployment (JSON file or one PostgreSQL row) - normalized tables needed for write throughput at the 100k target (TODO, highest backend priority).

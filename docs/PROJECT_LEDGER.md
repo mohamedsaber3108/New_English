@@ -23,7 +23,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | 4 | Learning engine depth: review (SM-2) DONE; placement, writing, recommendation | IN PROGRESS |
 | 5 | Persistence: PostgreSQL migration behind existing API contracts | DONE (document model) |
 | 6 | Scale: Redis sessions/cache, stateless app, WS coordination | TODO |
-| 7 | Admin/operations UI (replace raw JSON viewer) | TODO |
+| 7 | Admin/operations UI (replace raw JSON viewer) | DONE (MFA pending) |
 | 8 | Observability: structured logs, metrics, health/readiness | TODO |
 | 9 | Test matrix: unit, integration, e2e, load | TODO |
 | 10 | Release gates + go-live report | TODO |
@@ -89,11 +89,17 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 
 | Item | Status | Notes |
 |---|---|---|
-| Admin auth (shared bearer) | PARTIAL | single shared token; no identities/RBAC/MFA |
-| Admin overview/users/orders/support/audit/leads APIs | DONE (read) | `server/operations.js` |
-| Admin operations UI | TODO | currently raw JSON viewer |
-| Support ticket update | DONE | `PATCH /api/admin/support/:ref` |
-| Lead/meeting management UI | TODO | read-only today |
+| Admin accounts + sessions | DONE | `server/admin.js`: individual accounts (scrypt), separate HttpOnly/SameSite=Strict cookie scoped to /api/admin, 8h absolute + 30m idle, disabled admins cut off immediately. `tests/admin.test.mjs` |
+| RBAC | DONE | 5 roles -> 12 permissions, enforced per route server-side; no self role/status change; last active owner protected; only owners grant owner. 403s are audited |
+| Shared admin token | DONE (retired) | off by default; `ADMIN_LEGACY_TOKEN=true` = read-only + audited migration mode |
+| Admin MFA (TOTP) | TODO | not implemented yet - next security item |
+| Admin operations UI | DONE | `client/src/Admin.jsx` (lazy chunk): overview + integration status, users, orders, support, leads, audit, admins/roles. Search, filters, pagination, loading/empty/error states, reason-required actions. Browser E2E `tests/e2e/admin.e2e.mjs` (23 checks, Chrome) |
+| User operations | DONE | suspend/reactivate (ends sessions, blocks login), revoke sessions, mark email verified, grant/revoke entitlement |
+| Order operations | DONE | manual activation (unique payment ref, pending_contact only), refund record + entitlement revoke. Does NOT move money: provider refund is manual in the Paymob dashboard |
+| Support ticket management | DONE | filter/search + status/resolution; learner sees update |
+| Lead management | DONE | leads moved into primary storage (legacy JSONL imported once); status + notes |
+| Tamper-evident audit log | DONE | `server/audit.js`: HMAC chain, per-entry key id + keyring rotation, downgrade detection, trim anchor; verify endpoint + UI. `tests/audit.test.mjs` (17) + tamper test in admin suite. Archive of trimmed entries: TODO |
+| Admin CLI | DONE | `npm run admin:create` (password via env/stdin only); `admin:activate` ported to storage adapter + audit |
 
 ## 6. Infrastructure & scale (target: 100,000 registered users)
 
@@ -101,7 +107,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 |---|---|---|
 | Storage | DONE (document model) | `server/storage.js` adapter: JSON (default) or PostgreSQL via DATABASE_URL. PG uses row-locked txns, pooling, survives restart, shared across instances. Verified by `tests/storage.pg.test.mjs` + full app smoke/access run against real PG 16 (Docker). NEXT: normalized per-entity tables for write-concurrency at the top of the 100k range (contract unchanged). |
 | Shared rate limiting (Redis) | DONE | API (120/min/IP), auth, leads all Redis-backed when REDIS_URL set; verified vs real Redis 7 |
-| Sessions across instances | DONE | sessions live in storage (Postgres when DATABASE_URL set) so any instance can validate them |
+| Sessions across instances | DONE (fixed) | sessions live in storage. A stale-cache bug made sessions created on one instance invisible on another; fixed with a version check (commit c0d80f1) and proven by `tests/multi-instance.mjs` |
 | WebSocket room coordination across instances | DONE | `server/rooms.js`: Redis hash membership + atomic Lua join (4-cap holds globally), pub/sub fan-out, heartbeats prune crashed-instance ghosts; memory fallback. Proven by `tests/rooms.test.mjs` (2 instances: cross-instance message + global cap) |
 | Room safety | DONE | account name overrides spoofable query name; 20 msgs/10s per connection; ping/pong drops dead sockets; 4KB max payload; entitlement enforced on connect |
 | Object storage for media | TODO | no uploads today |
