@@ -77,6 +77,11 @@ recorded in the tamper-evident audit chain. Tests: `tests/admin.test.mjs` (API),
 | `/api/admin/auth/logout` | POST | session | console header | Live |
 | `/api/admin/auth/me` | GET | session | `AdminConsole` (session check) | Live |
 | `/api/admin/auth/password` | POST | session | `PasswordPanel` | Live |
+| `/api/admin/auth/mfa` | POST | MFA challenge (throttled) | `SignIn` code step | Live |
+| `/api/admin/mfa/setup` | POST | session (allowed before enrollment) | `MfaPanel` | Live |
+| `/api/admin/mfa/enable` | POST | session (allowed before enrollment) | `MfaPanel` | Live |
+| `/api/admin/mfa/disable` | POST | session + password + code | `MfaPanel` | Live |
+| `/api/admin/admins/:id/mfa/reset` | POST | admins.write | `AdminsScreen` | Live |
 | `/api/admin/overview` | GET | dashboard.read | `Overview` (KPIs + integration status) | Live |
 | `/api/admin/users` | GET | users.read | `UsersScreen` (q, status, subscription, verified, page) | Live |
 | `/api/admin/users/:id` | GET | users.read | `UsersScreen` detail | Live |
@@ -102,7 +107,7 @@ recorded in the tamper-evident audit chain. Tests: `tests/admin.test.mjs` (API),
 
 - Account/profile **edit** (name/phone) and **change password**: DONE. Email change (re-verify) deferred.
 - Receipt/invoice **printable** page: API exists; UI is an `alert()` (PARTIAL).
-- Admin operations UI, RBAC, lead management: DONE. Admin **MFA (TOTP)**: TODO.
+- Admin operations UI, RBAC, lead management, admin MFA (TOTP): DONE. QR code for MFA setup: TODO.
 - Calendar booking for meeting leads: TODO (leads record a preferred time; staff confirm manually).
 - Rate limiting and rooms are Redis-shared when `REDIS_URL` is set (DONE).
 - Core data is still a single document per deployment (JSON file or one PostgreSQL row) - normalized tables needed for write throughput at the 100k target (TODO, highest backend priority).

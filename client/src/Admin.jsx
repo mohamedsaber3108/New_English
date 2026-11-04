@@ -5,12 +5,12 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Activity, BadgeCheck, ClipboardList, FileClock, Inbox, KeyRound, LayoutDashboard, LifeBuoy, LogOut, RefreshCw, Search, ShieldCheck, ShoppingCart, UserCog, Users} from 'lucide-react';
 import './admin.css';
 
-class ApiError extends Error { constructor(message, status) { super(message); this.status = status; } }
+class ApiError extends Error { constructor(message, status, data = {}) { super(message); this.status = status; this.data = data; } }
 async function adminApi(path, {method = 'GET', body} = {}) {
   const r = await fetch('/api/admin/' + path, {method, credentials: 'same-origin', headers: body ? {'Content-Type': 'application/json'} : {}, body: body ? JSON.stringify(body) : undefined});
   let data = {};
   try { data = await r.json(); } catch {}
-  if (!r.ok) throw new ApiError(data.error || 'تعذر إكمال الطلب.', r.status);
+  if (!r.ok) throw new ApiError(data.error || 'تعذر إكمال الطلب.', r.status, data);
   return data;
 }
 const qs = obj => new URLSearchParams(Object.entries(obj).filter(([, v]) => v !== '' && v != null)).toString();
@@ -100,13 +100,38 @@ const ListState = ({list}) => list.loading && !list.data ? <div className="ad-em
 // ---------------------------------------------------------------- sign-in
 function SignIn({onSignedIn, expired}) {
   const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [stage, setStage] = useState('password'), [code, setCode] = useState(''), [useRecovery, setUseRecovery] = useState(false);
   const submit = async e => {
     e.preventDefault(); setBusy(true); setError('');
-    try { const d = await adminApi('auth/login', {method: 'POST', body: {email, password}}); setPassword(''); onSignedIn(d); }
+    try {
+      const d = await adminApi('auth/login', {method: 'POST', body: {email, password}});
+      setPassword('');
+      if (d.mfaRequired) { setStage('mfa'); setCode(''); } else onSignedIn(d);
+    }
     catch (err) { setError(err.status === 429 ? 'محاولات كثيرة. جرّب بعد ١٥ دقيقة.' : err.status === 401 ? 'البريد أو كلمة المرور غير صحيحة.' : err.message); }
     finally { setBusy(false); }
   };
-  return <section className="x-page"><div className="x-hero"><span>USAM Language Operations</span><h1>لوحة <em>التشغيل.</em></h1><p>دخول بحساب مشرف شخصي. كل إجراء يُسجل باسم صاحبه في سجل تدقيق محمي من التعديل.</p></div>
+  const submitCode = async e => {
+    e.preventDefault(); setBusy(true); setError('');
+    try { onSignedIn(await adminApi('auth/mfa', {method: 'POST', body: useRecovery ? {recoveryCode: code} : {code}})); }
+    catch (err) {
+      if (err.data?.restart || (err.status === 401 && !/Incorrect code/.test(err.message))) { setStage('password'); setError('انتهت محاولة الدخول أو تجاوزت عدد المحاولات. أدخل البريد وكلمة المرور من جديد.'); }
+      else setError(err.status === 429 ? 'محاولات كثيرة. جرّب بعد ١٥ دقيقة.' : 'الرمز غير صحيح.');
+    }
+    finally { setBusy(false); setCode(''); }
+  };
+  const hero = <div className="x-hero"><span>USAM Language Operations</span><h1>لوحة <em>التشغيل.</em></h1><p>دخول بحساب مشرف شخصي. كل إجراء يُسجل باسم صاحبه في سجل تدقيق محمي من التعديل.</p></div>;
+  if (stage === 'mfa') return <section className="x-page">{hero}
+    <form className="x-card ad-login" onSubmit={submitCode}>
+      <KeyRound size={30} aria-hidden="true"/>
+      <h2>التحقق بخطوتين</h2>
+      <p>{useRecovery ? 'أدخل أحد رموز الاسترداد التي حفظتها عند تفعيل التحقق بخطوتين. كل رمز يعمل مرة واحدة.' : 'أدخل الرمز المكون من ٦ أرقام من تطبيق المصادقة على هاتفك.'}</p>
+      <label>{useRecovery ? 'رمز الاسترداد' : 'رمز التحقق'}<input dir="ltr" className="ad-code" value={code} onChange={e => setCode(e.target.value)} autoFocus required {...(useRecovery ? {autoComplete: 'off', placeholder: 'xxxxx-xxxxx'} : {inputMode: 'numeric', autoComplete: 'one-time-code', pattern: '[0-9 ]{6,7}', maxLength: 7, placeholder: '123456'})}/></label>
+      <button className="m-action" type="submit" disabled={busy}>{busy ? 'جاري التحقق…' : 'تأكيد'}</button>
+      <Notice kind="error">{error}</Notice>
+      <div className="ad-row"><button type="button" className="ad-btn ghost" onClick={() => { setUseRecovery(!useRecovery); setCode(''); setError(''); }}>{useRecovery ? 'استخدام تطبيق المصادقة' : 'فقدت هاتفي — استخدام رمز استرداد'}</button><button type="button" className="ad-btn ghost" onClick={() => { setStage('password'); setError(''); }}>رجوع</button></div>
+    </form></section>;
+  return <section className="x-page">{hero}
     <form className="x-card ad-login" onSubmit={submit}>
       <ShieldCheck size={30} aria-hidden="true"/>
       <h2>تسجيل دخول المشرفين</h2>
@@ -327,7 +352,9 @@ function AdminsScreen({me, perms, onAuthLost}) {
       {key: 'name', label: 'الاسم', render: r => <>{r.name}{r.id === me.id && <Badge>أنت</Badge>}</>}, {key: 'email', label: 'البريد', ltr: true},
       {key: 'role', label: 'الدور', render: r => canWrite && r.id !== me.id ? <select aria-label={'دور ' + r.email} value={r.role} disabled={act.busy} onChange={e => update(r, {role: e.target.value}, 'تم تغيير الدور وإنهاء جلساته.')}>{Object.keys(ROLE_LABEL).filter(k => k !== 'owner' || me.role === 'owner').map(k => <option key={k} value={k}>{ROLE_LABEL[k]}</option>)}</select> : ROLE_LABEL[r.role] || r.role},
       {key: 'status', label: 'الحالة', render: r => r.status === 'active' ? <Badge tone="good">نشط</Badge> : <Badge tone="bad">معطّل</Badge>},
+      {key: 'mfa', label: 'التحقق بخطوتين', render: r => r.mfaEnabled ? <Badge tone="good">مفعّل</Badge> : <Badge tone="warn">غير مفعّل</Badge>},
       {key: 'lastLoginAt', label: 'آخر دخول', render: r => fmtDate(r.lastLoginAt)},
+      {key: 'mfaReset', label: '', render: r => canWrite && r.id !== me.id && r.mfaEnabled ? <ReasonAction label="إعادة ضبط التحقق" tone="danger" confirmText={`سيُطلب من ${r.email} إعداد التحقق بخطوتين من جديد وتُنهى جلساته. تأكد من هويته أولًا. متابعة؟`} busy={act.busy} onSubmit={b => act.run(() => adminApi(`admins/${r.id}/mfa/reset`, {method: 'POST', body: b}), 'تمت إعادة ضبط التحقق بخطوتين.').then(x => { if (x) list.reload(); return !!x; })}/> : null},
       {key: 'actions', label: '', render: r => canWrite && r.id !== me.id ? <button type="button" className={'ad-btn ' + (r.status === 'active' ? 'danger' : '')} disabled={act.busy} onClick={() => { if (r.status !== 'active' || confirm(`تعطيل ${r.email}؟ ستُنهى جلساته فورًا.`)) update(r, {status: r.status === 'active' ? 'disabled' : 'active'}, r.status === 'active' ? 'تم تعطيل المشرف.' : 'تم تفعيل المشرف.'); }}>{r.status === 'active' ? 'تعطيل' : 'تفعيل'}</button> : null}]}/><Pager data={list.data} onPage={list.setPage}/></>}
     {canWrite && <form className="x-card ad-create" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('admins', {method: 'POST', body: form}), 'تم إنشاء حساب المشرف. شارك كلمة المرور عبر قناة آمنة واطلب تغييرها.'); if (r) { setForm({email: '', name: '', role: 'support', password: ''}); list.reload(); } }}>
       <h2><KeyRound size={20} aria-hidden="true"/> إضافة مشرف</h2>
@@ -346,16 +373,54 @@ function AdminsScreen({me, perms, onAuthLost}) {
 }
 
 // ---------------------------------------------------------------- password change
-function PasswordPanel({onAuthLost, onClose}) {
+function PasswordPanel({onAuthLost}) {
   const [f, setF] = useState({currentPassword: '', newPassword: ''});
   const act = useAction(onAuthLost);
   return <form className="x-card ad-password" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('auth/password', {method: 'POST', body: f}), r => r.message); if (r) setF({currentPassword: '', newPassword: ''}); }}>
     <h2>تغيير كلمة المرور</h2>
     <label>الحالية<input type="password" dir="ltr" autoComplete="current-password" value={f.currentPassword} onChange={e => setF({...f, currentPassword: e.target.value})} required/></label>
     <label>الجديدة (١٢ حرفًا على الأقل)<input type="password" dir="ltr" autoComplete="new-password" value={f.newPassword} onChange={e => setF({...f, newPassword: e.target.value})} required minLength={12}/></label>
-    <div className="ad-row"><button className="ad-btn primary" type="submit" disabled={act.busy}>حفظ</button><button type="button" className="ad-btn ghost" onClick={onClose}>إغلاق</button></div>
+    <div className="ad-row"><button className="ad-btn primary" type="submit" disabled={act.busy}>حفظ</button></div>
     <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
   </form>;
+}
+
+// Two-factor authentication: enroll (setup key -> confirm code -> recovery codes shown once) or disable.
+function MfaPanel({session, onAuthLost, onChanged}) {
+  const act = useAction(onAuthLost);
+  const [setup, setSetup] = useState(null), [code, setCode] = useState(''), [codes, setCodes] = useState(null), [dis, setDis] = useState({password: '', code: ''});
+  const enabled = session.admin.mfaEnabled;
+  if (codes) return <div className="x-card ad-mfa">
+    <h2><ShieldCheck size={20} aria-hidden="true"/> التحقق بخطوتين مفعّل</h2>
+    <Notice kind="info">احفظ رموز الاسترداد هذه في مكان آمن (مدير كلمات مرور أو ورقة في مكان مغلق). كل رمز يعمل مرة واحدة إذا فقدت هاتفك، ولن تظهر مرة أخرى.</Notice>
+    <ol className="ad-codes" dir="ltr">{codes.map(c => <li key={c}><code>{c}</code></li>)}</ol>
+    <div className="ad-row"><button type="button" className="ad-btn" onClick={() => navigator.clipboard?.writeText(codes.join('\n'))}>نسخ الرموز</button><button type="button" className="ad-btn primary" onClick={() => { setCodes(null); onChanged(); }}>حفظتها، متابعة</button></div>
+  </div>;
+  if (enabled) return <form className="x-card ad-mfa" onSubmit={async e => { e.preventDefault(); if (!confirm('سيصبح الدخول بكلمة المرور فقط. متابعة؟')) return; const r = await act.run(() => adminApi('mfa/disable', {method: 'POST', body: dis}), 'تم إيقاف التحقق بخطوتين.'); if (r) { setDis({password: '', code: ''}); onChanged(); } }}>
+    <h2><ShieldCheck size={20} aria-hidden="true"/> التحقق بخطوتين</h2>
+    <p><Badge tone="good">مفعّل</Badge> {session.recoveryCodesLeft != null && <>· متبقٍ {session.recoveryCodesLeft} من رموز الاسترداد{session.recoveryCodesLeft <= 2 && ' — اطلب من المالك إعادة الضبط لإصدار رموز جديدة'}</>}</p>
+    <h3>إيقاف التحقق بخطوتين</h3>
+    <label>كلمة المرور<input type="password" dir="ltr" autoComplete="current-password" value={dis.password} onChange={e => setDis({...dis, password: e.target.value})} required/></label>
+    <label>رمز التطبيق الحالي<input dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={dis.code} onChange={e => setDis({...dis, code: e.target.value})} required/></label>
+    <div className="ad-row"><button className="ad-btn danger" type="submit" disabled={act.busy}>إيقاف</button></div>
+    <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
+  </form>;
+  return <div className="x-card ad-mfa">
+    <h2><ShieldCheck size={20} aria-hidden="true"/> تفعيل التحقق بخطوتين</h2>
+    {session.mfaAvailable === false ? <Notice kind="error">التحقق بخطوتين غير مهيأ على هذا الخادم. يجب ضبط ADMIN_MFA_KEY أولًا.</Notice> : !setup ? <>
+      <p>يحمي حسابك حتى لو تسربت كلمة المرور. ستحتاج تطبيق مصادقة مثل Google Authenticator أو Microsoft Authenticator أو 1Password.</p>
+      <div className="ad-row"><button type="button" className="ad-btn primary" disabled={act.busy} onClick={async () => { const r = await act.run(() => adminApi('mfa/setup', {method: 'POST'}), ''); if (r) setSetup(r); }}>ابدأ الإعداد</button></div>
+    </> : <form className="ad-stack" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('mfa/enable', {method: 'POST', body: {code}}), r => r.message); if (r) { setCodes(r.recoveryCodes); setSetup(null); setCode(''); } }}>
+      <ol className="ad-steps">
+        <li>افتح تطبيق المصادقة واختر «إضافة حساب» ثم «إدخال مفتاح الإعداد».</li>
+        <li>أدخل هذا المفتاح (نوع: حسب الوقت):<div className="ad-secret" dir="ltr">{setup.secret.match(/.{1,4}/g).join(' ')}</div><small>على الهاتف يمكنك فتح <a href={setup.otpauthUri} dir="ltr">رابط الإضافة المباشر</a>.</small></li>
+        <li>أدخل الرمز المكون من ٦ أرقام الذي يظهر في التطبيق.</li>
+      </ol>
+      <label>رمز التحقق<input dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={code} onChange={e => setCode(e.target.value)} required autoFocus/></label>
+      <div className="ad-row"><button className="ad-btn primary" type="submit" disabled={act.busy}>{act.busy ? 'جاري التحقق…' : 'تفعيل'}</button><button type="button" className="ad-btn ghost" onClick={() => setSetup(null)}>إلغاء</button></div>
+    </form>}
+    {act.msg.text && act.msg.kind === 'error' && <Notice kind="error">{act.msg.text}</Notice>}
+  </div>;
 }
 
 // ---------------------------------------------------------------- console shell
@@ -365,21 +430,29 @@ export default function AdminConsole() {
   useEffect(() => { adminApi('auth/me').then(setSession).catch(() => setSession(null)); return () => { mounted.current = false; }; }, []);
   const onAuthLost = useCallback(() => { setSession(null); setExpired(true); }, []);
   if (session === undefined) return <section className="x-page"><div className="x-card">جاري التحقق من الجلسة…</div></section>;
-  if (!session) return <SignIn expired={expired} onSignedIn={d => { setExpired(false); setSession(d); const first = TABS.find(t => d.permissions.includes(t.perm)); setTab(first?.id || 'overview'); }}/>;
+  if (!session) return <SignIn expired={expired} onSignedIn={d => { setExpired(false); setSession(d); const first = TABS.find(t => d.permissions.includes(t.perm)); setTab(first?.id || 'overview'); adminApi('auth/me').then(setSession).catch(() => {}); }}/>;
   const perms = session.permissions || [];
   const tabs = TABS.filter(t => perms.includes(t.perm));
   const current = tabs.find(t => t.id === tab) ? tab : tabs[0]?.id;
   const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} setSession(null); setExpired(false); };
+  const refresh = () => adminApi('auth/me').then(setSession).catch(onAuthLost);
   const props = {perms, onAuthLost, me: session.admin};
+  const security = <><MfaPanel session={session} onAuthLost={onAuthLost} onChanged={refresh}/><PasswordPanel onAuthLost={onAuthLost}/></>;
+  // ADMIN_REQUIRE_MFA: nothing but enrollment until two-factor authentication is on.
+  if (session.mfaEnrollmentRequired) return <section className="x-page ad-page">
+    <header className="ad-head"><div><span className="ad-kicker">USAM Language Operations</span><h1>لوحة التشغيل</h1></div><div className="ad-who"><span><b>{session.admin.name}</b><small>{ROLE_LABEL[session.admin.role]}</small></span><button type="button" className="ad-btn ghost" onClick={logout}><LogOut size={15} aria-hidden="true"/> خروج</button></div></header>
+    <Notice kind="info">يتطلب هذا الخادم التحقق بخطوتين لكل المشرفين. فعّله للمتابعة.</Notice>
+    {security}
+  </section>;
   return <section className="x-page ad-page">
     <header className="ad-head">
       <div><span className="ad-kicker">USAM Language Operations</span><h1>لوحة التشغيل</h1></div>
       <div className="ad-who"><span><b>{session.admin.name}</b><small>{ROLE_LABEL[session.admin.role] || session.admin.role}{session.legacy ? ' · رمز قديم (قراءة فقط)' : ''}</small></span>
-        {!session.legacy && <button type="button" className="ad-btn ghost" onClick={() => setPw(!pw)}><KeyRound size={15} aria-hidden="true"/> كلمة المرور</button>}
+        {!session.legacy && <button type="button" className="ad-btn ghost" aria-expanded={pw} onClick={() => setPw(!pw)}><KeyRound size={15} aria-hidden="true"/> الأمان{session.admin.mfaEnabled ? '' : ' ⚠'}</button>}
         <button type="button" className="ad-btn ghost" onClick={logout}><LogOut size={15} aria-hidden="true"/> خروج</button></div>
     </header>
     {session.legacy && <Notice kind="info">أنت تستخدم رمز الإدارة القديم المشترك (قراءة فقط). أنشئ حسابات مشرفين شخصية ثم عطّل ADMIN_LEGACY_TOKEN.</Notice>}
-    {pw && <PasswordPanel onAuthLost={onAuthLost} onClose={() => setPw(false)}/>}
+    {pw && <div className="ad-security">{security}</div>}
     <nav className="x-tabs ad-tabs" aria-label="أقسام لوحة التشغيل">{tabs.map(t => <button type="button" key={t.id} className={current === t.id ? 'active' : ''} aria-current={current === t.id ? 'page' : undefined} onClick={() => setTab(t.id)}><t.icon size={16} aria-hidden="true"/> {t.label}</button>)}</nav>
     {!tabs.length ? <Notice kind="info">لا توجد أقسام متاحة لدورك.</Notice>
       : current === 'overview' ? <Overview {...props}/>

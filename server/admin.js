@@ -16,6 +16,7 @@ import {readFile} from 'node:fs/promises';
 import {randomBytes, randomUUID, createHash, timingSafeEqual} from 'node:crypto';
 import {appendAudit, verifyAudit} from './audit.js';
 import {passwordHash, checkPassword, dummyCheck, validPassword} from './passwords.js';
+import {newSecret, verifyTotp, otpauthUri, sealSecret, openSecret, base32Encode} from './totp.js';
 
 export const PERMISSIONS = {
   'dashboard.read': 'View the operations overview and integration status',
@@ -50,7 +51,17 @@ const clean = (v, max = 120) => String(v ?? '').trim().slice(0, max);
 const nowIso = () => new Date().toISOString();
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
-export const publicAdmin = a => ({id: a.id, email: a.email, name: a.name, role: a.role, status: a.status, createdAt: a.createdAt, lastLoginAt: a.lastLoginAt || null});
+export const publicAdmin = a => ({id: a.id, email: a.email, name: a.name, role: a.role, status: a.status, createdAt: a.createdAt, lastLoginAt: a.lastLoginAt || null, mfaEnabled: !!a.mfa?.enabled});
+
+// ---- MFA (TOTP) settings ----
+//   ADMIN_MFA_KEY      encrypts TOTP secrets at rest (AES-256-GCM). Required to enroll or verify MFA.
+//   ADMIN_REQUIRE_MFA  when "true", an admin without MFA can sign in but can do nothing except enroll.
+const mfaKey = () => process.env.ADMIN_MFA_KEY || '';
+const mfaRequired = () => process.env.ADMIN_REQUIRE_MFA === 'true';
+const CHALLENGE_MS = 5 * 60 * 1000, CHALLENGE_ATTEMPTS = 5, RECOVERY_CODES = 8;
+const newRecoveryCode = () => { const s = base32Encode(randomBytes(7)).slice(0, 10).toLowerCase(); return s.slice(0, 5) + '-' + s.slice(5); };
+const recoveryHash = c => sha('usam-recovery:' + String(c).toLowerCase().replace(/[^a-z0-9]/g, ''));
+const mfaUnavailable = () => Object.assign(Error('MFA is not configured on this server (set ADMIN_MFA_KEY).'), {status: 503});
 
 // Pure helper used by the API and by the CLI bootstrap script.
 export async function buildAdmin({email, name, role, password, createdBy = null}) {
@@ -86,18 +97,37 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     const raw = readCookie(req);
     if (!raw) return null;
     const h = sha(raw), now = Date.now();
-    const session = db.adminSessions.find(s => s.hash === h && s.expires > now && s.lastSeen > now - idleMs());
+    // Only fully authenticated sessions grant access. An MFA challenge session (stage 'mfa') never does.
+    const session = db.adminSessions.find(s => s.hash === h && (s.stage || 'full') === 'full' && s.expires > now && s.lastSeen > now - idleMs());
     if (!session) return null;
     const admin = db.admins.find(a => a.id === session.adminId && a.status === 'active');
     return admin ? {admin, session} : null;
   }
+  function currentChallenge(req, db) {
+    const raw = readCookie(req);
+    if (!raw) return null;
+    const session = db.adminSessions.find(s => s.hash === sha(raw) && s.stage === 'mfa' && s.expires > Date.now());
+    const admin = session && db.admins.find(a => a.id === session.adminId && a.status === 'active');
+    return admin ? {admin, session} : null;
+  }
+  // Creates a full session (fresh token) and sets the cookie. Must run inside mutate().
+  function issueFullSession(db, req, admin, now) {
+    const token = randomBytes(32).toString('hex');
+    db.adminSessions = db.adminSessions.filter(s => s.expires > now && ((s.stage || 'full') === 'mfa' || s.lastSeen > now - idleMs()));
+    db.adminSessions.push({id: randomUUID(), hash: sha(token), adminId: admin.id, stage: 'full', createdAt: now, lastSeen: now, expires: now + sessionMs(), device: clean(req.get('user-agent') || 'Browser', 120)});
+    const a = db.admins.find(x => x.id === admin.id); if (a) a.lastLoginAt = nowIso();
+    return token;
+  }
+  const sessionPayload = admin => ({admin: publicAdmin(admin), permissions: ROLES[admin.role].permissions, mfaEnrollmentRequired: mfaRequired() && !admin.mfa?.enabled});
   function setCookie(req, res, token, maxAgeMs) {
     const secure = req.secure || process.env.NODE_ENV === 'production';
     res.setHeader('Set-Cookie', `${COOKIE}=${token}; Path=/api/admin; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(maxAgeMs / 1000)}${secure ? '; Secure' : ''}`);
   }
 
   // Authorization middleware. Every admin route goes through this with the permission it requires.
-  const requireAdmin = perm => async (req, res, next) => {
+  // allowUnenrolled: routes an admin may use before enrolling MFA when ADMIN_REQUIRE_MFA=true
+  // (session info, password change, MFA enrollment). Everything else is blocked until MFA is on.
+  const requireAdmin = (perm, {allowUnenrolled = false} = {}) => async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
       const bearer = String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');
@@ -111,6 +141,7 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       const db = await customer.store();
       const found = currentAdmin(req, db);
       if (!found) return res.status(401).json({error: 'Administrator sign-in required.'});
+      if (mfaRequired() && !found.admin.mfa?.enabled && !allowUnenrolled) return res.status(403).json({error: 'Two-factor authentication must be enabled before using the console.', mfaEnrollmentRequired: true});
       if (perm && !can(found.admin.role, perm)) {
         await customer.mutate(d => { appendAudit(d, {event: 'admin_permission_denied', actor: {type: 'admin', id: found.admin.id, role: found.admin.role}, meta: {permission: perm, method: req.method, path: req.path}}); });
         return res.status(403).json({error: 'Your role does not allow this action.'});
@@ -133,15 +164,116 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
         await customer.mutate(db => { appendAudit(db, {event: 'admin_login_failed', actor: admin ? {type: 'admin', id: admin.id} : null, meta: {emailHash: sha(email).slice(0, 16), reason: !admin ? 'unknown' : !valid ? 'password' : 'disabled'}}); });
         return res.status(401).json({error: 'Incorrect email or password.'});
       }
-      const token = randomBytes(32).toString('hex'), now = Date.now();
+      const now = Date.now();
+      if (admin.mfa?.enabled) {
+        // Password is correct but MFA is on: issue a short-lived challenge session that grants nothing.
+        const challenge = randomBytes(32).toString('hex');
+        await customer.mutate(db => {
+          db.adminSessions = db.adminSessions.filter(s => s.expires > now);
+          db.adminSessions.push({id: randomUUID(), hash: sha(challenge), adminId: admin.id, stage: 'mfa', attempts: 0, createdAt: now, lastSeen: now, expires: now + CHALLENGE_MS});
+          appendAudit(db, {event: 'admin_login_mfa_challenge', actor: {type: 'admin', id: admin.id}});
+        });
+        setCookie(req, res, challenge, CHALLENGE_MS);
+        return res.json({mfaRequired: true});
+      }
+      let token;
       await customer.mutate(db => {
-        db.adminSessions = db.adminSessions.filter(s => s.expires > now && s.lastSeen > now - idleMs());
-        db.adminSessions.push({id: randomUUID(), hash: sha(token), adminId: admin.id, createdAt: now, lastSeen: now, expires: now + sessionMs(), device: clean(req.get('user-agent') || 'Browser', 120)});
-        const a = db.admins.find(x => x.id === admin.id); if (a) a.lastLoginAt = nowIso();
-        appendAudit(db, {event: 'admin_login', actor: {type: 'admin', id: admin.id, role: admin.role}});
+        token = issueFullSession(db, req, admin, now);
+        appendAudit(db, {event: 'admin_login', actor: {type: 'admin', id: admin.id, role: admin.role}, meta: {mfa: 'none'}});
       });
       setCookie(req, res, token, sessionMs());
-      res.json({admin: publicAdmin(admin), permissions: ROLES[admin.role].permissions});
+      res.json(sessionPayload(admin));
+    } catch (e) { fail(res, e); }
+  });
+
+  // Second sign-in step: an authenticator code (or a one-time recovery code) upgrades the challenge to a full
+  // session under a NEW token. Max CHALLENGE_ATTEMPTS tries per challenge; codes cannot be replayed.
+  router.post('/admin/auth/mfa', customer.throttle, async (req, res) => {
+    try {
+      const code = String(req.body?.code || ''), recovery = String(req.body?.recoveryCode || '');
+      if (!mfaKey()) throw mfaUnavailable();
+      let outcome;
+      await customer.mutate(db => {
+        const ch = currentChallenge(req, db);
+        if (!ch) { outcome = {status: 401, error: 'Sign-in expired. Enter your email and password again.'}; return; }
+        const s = db.adminSessions.find(x => x.id === ch.session.id), a = db.admins.find(x => x.id === ch.admin.id);
+        s.attempts = (s.attempts || 0) + 1;
+        let method = null;
+        if (recovery) {
+          const h = recoveryHash(recovery), rc = (a.mfa.recovery || []).find(r => r.hash === h && !r.usedAt);
+          if (rc) { rc.usedAt = nowIso(); method = 'recovery'; }
+        } else {
+          const v = verifyTotp(openSecret(a.mfa.secret, mfaKey()), code, {lastStep: a.mfa.lastStep ?? -1});
+          if (v.ok) { a.mfa.lastStep = v.step; method = 'totp'; }
+        }
+        if (!method) {
+          const exhausted = s.attempts >= CHALLENGE_ATTEMPTS;
+          if (exhausted) db.adminSessions = db.adminSessions.filter(x => x.id !== s.id);
+          appendAudit(db, {event: 'admin_mfa_failed', actor: {type: 'admin', id: a.id}, meta: {attempt: s.attempts, exhausted, kind: recovery ? 'recovery' : 'totp'}});
+          outcome = {status: 401, error: exhausted ? 'Too many incorrect codes. Sign in again.' : 'Incorrect code.', restart: exhausted};
+          return;
+        }
+        db.adminSessions = db.adminSessions.filter(x => x.id !== s.id);
+        const token = issueFullSession(db, req, a, Date.now());
+        const left = (a.mfa.recovery || []).filter(r => !r.usedAt).length;
+        appendAudit(db, {event: 'admin_login', actor: {type: 'admin', id: a.id, role: a.role}, meta: {mfa: method, ...(method === 'recovery' ? {recoveryCodesLeft: left} : {})}});
+        outcome = {status: 200, token, admin: a, left, method};
+      });
+      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error, restart: !!outcome.restart});
+      setCookie(req, res, outcome.token, sessionMs());
+      res.json({...sessionPayload(outcome.admin), ...(outcome.method === 'recovery' ? {recoveryCodesLeft: outcome.left} : {})});
+    } catch (e) { fail(res, e); }
+  });
+
+  // ---------------- MFA enrollment ----------------
+  router.post('/admin/mfa/setup', requireAdmin(null, {allowUnenrolled: true}), async (req, res) => {
+    try {
+      if (req.admin.legacy) return res.status(403).json({error: 'Not available for the legacy token.'});
+      if (!mfaKey()) throw mfaUnavailable();
+      if (req.admin.mfa?.enabled) return res.status(409).json({error: 'Two-factor authentication is already enabled.'});
+      const secret = newSecret();
+      await customer.mutate(db => { const a = db.admins.find(x => x.id === req.admin.id); a.mfa = {enabled: false, pending: sealSecret(secret, mfaKey()), pendingAt: Date.now()}; });
+      // The secret is shown once so the admin can add it to an authenticator app; only the sealed form is stored.
+      res.json({secret, otpauthUri: otpauthUri({secret, account: req.admin.email})});
+    } catch (e) { fail(res, e); }
+  });
+  router.post('/admin/mfa/enable', requireAdmin(null, {allowUnenrolled: true}), async (req, res) => {
+    try {
+      if (!mfaKey()) throw mfaUnavailable();
+      let outcome;
+      const codes = Array.from({length: RECOVERY_CODES}, newRecoveryCode);
+      await customer.mutate(db => {
+        const a = db.admins.find(x => x.id === req.admin.id);
+        if (a.mfa?.enabled) { outcome = {status: 409, error: 'Two-factor authentication is already enabled.'}; return; }
+        if (!a.mfa?.pending || Date.now() - a.mfa.pendingAt > 15 * 60 * 1000) { outcome = {status: 409, error: 'Start setup again (the setup key expired after 15 minutes).'}; return; }
+        const secret = openSecret(a.mfa.pending, mfaKey());
+        const v = verifyTotp(secret, req.body?.code);
+        if (!v.ok) { outcome = {status: 400, error: 'Incorrect code. Check the time on your phone and try again.'}; return; }
+        a.mfa = {enabled: true, secret: a.mfa.pending, enabledAt: nowIso(), lastStep: v.step, recovery: codes.map(c => ({hash: recoveryHash(c)}))};
+        // Other sessions were authenticated without MFA: end them, keep the current one.
+        db.adminSessions = db.adminSessions.filter(s => s.adminId !== a.id || s.id === req.adminSession.id);
+        appendAudit(db, {event: 'admin_mfa_enabled', actor: {type: 'admin', id: a.id, role: a.role}});
+        outcome = {status: 200};
+      });
+      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
+      res.json({ok: true, recoveryCodes: codes, message: 'Two-factor authentication is on. Store these recovery codes somewhere safe; each works once and they are not shown again.'});
+    } catch (e) { fail(res, e); }
+  });
+  router.post('/admin/mfa/disable', requireAdmin(null, {allowUnenrolled: true}), async (req, res) => {
+    try {
+      if (!mfaKey()) throw mfaUnavailable();
+      if (!req.admin.mfa?.enabled) return res.status(409).json({error: 'Two-factor authentication is not enabled.'});
+      if (!await checkPassword(String(req.body?.password || ''), req.admin.password)) return res.status(403).json({error: 'Password is incorrect.'});
+      let ok = false;
+      await customer.mutate(db => {
+        const a = db.admins.find(x => x.id === req.admin.id);
+        const v = verifyTotp(openSecret(a.mfa.secret, mfaKey()), req.body?.code, {lastStep: a.mfa.lastStep ?? -1});
+        if (!v.ok) return;
+        delete a.mfa; ok = true;
+        appendAudit(db, {event: 'admin_mfa_disabled', actor: {type: 'admin', id: a.id, role: a.role}});
+      });
+      if (!ok) return res.status(400).json({error: 'Incorrect code.'});
+      res.json({ok: true, mfaEnrollmentRequired: mfaRequired()});
     } catch (e) { fail(res, e); }
   });
 
@@ -156,12 +288,12 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
     res.json({ok: true});
   });
 
-  router.get('/admin/auth/me', requireAdmin(null), (req, res) => {
+  router.get('/admin/auth/me', requireAdmin(null, {allowUnenrolled: true}), (req, res) => {
     if (req.admin.legacy) return res.json({admin: {id: 'legacy-token', name: 'Legacy token', role: 'viewer'}, permissions: ROLES.viewer.permissions, legacy: true});
-    res.json({admin: publicAdmin(req.admin), permissions: ROLES[req.admin.role].permissions, idleTimeoutMs: idleMs(), sessionExpiresAt: req.adminSession.expires});
+    res.json({...sessionPayload(req.admin), idleTimeoutMs: idleMs(), sessionExpiresAt: req.adminSession.expires, mfaAvailable: !!mfaKey(), recoveryCodesLeft: req.admin.mfa?.enabled ? (req.admin.mfa.recovery || []).filter(r => !r.usedAt).length : null});
   });
 
-  router.post('/admin/auth/password', requireAdmin(null), async (req, res) => {
+  router.post('/admin/auth/password', requireAdmin(null, {allowUnenrolled: true}), async (req, res) => {
     try {
       if (req.admin.legacy) return res.status(403).json({error: 'Not available for the legacy token.'});
       const current = String(req.body?.currentPassword || ''), next = String(req.body?.newPassword || '');
@@ -449,6 +581,26 @@ export function adminRouter(customer, {root, leadsFile, integrations = () => ({}
       res.status(201).json({admin: publicAdmin(a)});
     } catch (e) { fail(res, e); }
   });
+  // Lost authenticator: an owner/admins.write holder resets another admin's MFA (they re-enroll at next sign-in).
+  router.post('/admin/admins/:id/mfa/reset', requireAdmin('admins.write'), async (req, res) => {
+    try {
+      const reason = reasonOf(req);
+      if (req.params.id === req.admin.id) return res.status(409).json({error: 'Use your own security settings to change your two-factor authentication.'});
+      let outcome;
+      await customer.mutate(db => {
+        const a = db.admins.find(x => x.id === req.params.id);
+        if (!a) { outcome = {status: 404, error: 'Administrator not found.'}; return; }
+        const had = !!a.mfa?.enabled;
+        delete a.mfa;
+        db.adminSessions = db.adminSessions.filter(s => s.adminId !== a.id);
+        appendAudit(db, {event: 'admin_mfa_reset', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {wasEnabled: had, reason}});
+        outcome = {status: 200, admin: publicAdmin(a)};
+      });
+      if (outcome.status !== 200) return res.status(outcome.status).json({error: outcome.error});
+      res.json({admin: outcome.admin});
+    } catch (e) { fail(res, e); }
+  });
+
   router.patch('/admin/admins/:id', requireAdmin('admins.write'), async (req, res) => {
     const role = req.body?.role === undefined ? undefined : clean(req.body.role, 20);
     const status = req.body?.status === undefined ? undefined : clean(req.body.status, 20);

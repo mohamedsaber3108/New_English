@@ -66,5 +66,18 @@ changing their role ends their sessions immediately.
 ## 6. Sessions
 
 Admin sessions last at most 8 hours (`ADMIN_SESSION_MS`) and expire after 30 minutes idle (`ADMIN_IDLE_MS`).
-The admin cookie is HttpOnly, SameSite=Strict and scoped to `/api/admin`. Multi-factor authentication is not yet
-implemented.
+The admin cookie is HttpOnly, SameSite=Strict and scoped to `/api/admin`.
+
+## 7. Two-factor authentication (TOTP)
+
+- Set `ADMIN_MFA_KEY` (random, 32+ bytes, kept out of the database) and `ADMIN_REQUIRE_MFA=true` in production.
+  With `ADMIN_REQUIRE_MFA=true` an admin without MFA can sign in but can do nothing except enroll.
+- Enroll: console header → **الأمان** → *ابدأ الإعداد*. Add the setup key to an authenticator app (Google/Microsoft
+  Authenticator, 1Password, …), confirm a 6-digit code, then store the 8 recovery codes shown once.
+  A QR code is not displayed yet; use the setup key or the direct `otpauth://` link on the phone.
+- Sign-in becomes two steps: password, then code (or a one-time recovery code). A challenge allows 5 attempts and
+  expires after 5 minutes; codes cannot be replayed.
+- Lost phone: the owner opens **المشرفون والأدوار** → *إعادة ضبط التحقق* on that admin (after verifying their
+  identity out of band), with a reason. The admin re-enrolls at next sign-in. The reset is audited.
+- Losing `ADMIN_MFA_KEY` makes enrolled secrets unreadable: every MFA admin would need a reset by an owner — and if
+  all owners are enrolled, use `npm run admin:create` to create a recovery owner. Back the key up separately.

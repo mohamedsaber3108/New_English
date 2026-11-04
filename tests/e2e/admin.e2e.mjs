@@ -7,6 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright-core';
 import {freePort} from '../helpers.mjs';
+import {totpAt} from '../../server/totp.js';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
@@ -24,7 +25,7 @@ if (!exe) { console.log('admin.e2e: no Chrome/Edge found (set CHROME_PATH) — s
 try { await access('dist/index.html'); } catch { console.error('admin.e2e: dist/ missing — run `npm run build:app` first.'); process.exit(1); }
 
 const dir = await mkdtemp(join(tmpdir(), 'usam-e2e-'));
-const env = {...process.env, NODE_ENV: 'test', DATABASE_URL: '', CUSTOMER_DB_FILE: join(dir, 'db.json'), LEADS_FILE: join(dir, 'l.jsonl'), RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '1000', AUDIT_HMAC_KEY: 'e2e-audit-key-0123456789', VITE_STATIC_PREVIEW: ''};
+const env = {...process.env, NODE_ENV: 'test', DATABASE_URL: '', CUSTOMER_DB_FILE: join(dir, 'db.json'), LEADS_FILE: join(dir, 'l.jsonl'), RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '1000', AUDIT_HMAC_KEY: 'e2e-audit-key-0123456789', ADMIN_MFA_KEY: 'e2e-mfa-key-0123456789abcdef', VITE_STATIC_PREVIEW: ''};
 const run = (args, extra = {}) => new Promise(res => { const p = spawn(process.execPath, args, {env: {...env, ...extra}, stdio: ['ignore', 'pipe', 'pipe']}); let o = ''; p.stdout.on('data', d => o += d); p.stderr.on('data', d => o += d); p.on('exit', c => res({c, o})); });
 
 let server, browser;
@@ -117,6 +118,20 @@ try {
   ok(overflow <= 1, `no horizontal page overflow on a 390px phone (overflow ${overflow}px; tables scroll inside their container)`);
   await page.setViewportSize({width: 1366, height: 900});
 
+  // ---- MFA enrollment through the security panel ----
+  await page.getByRole('button', {name: /الأمان/}).click();
+  await page.getByRole('button', {name: 'ابدأ الإعداد'}).click();
+  await page.locator('.ad-secret').waitFor({timeout: 10000});
+  const shownSecret = (await page.locator('.ad-secret').innerText()).replace(/\s+/g, '');
+  ok(/^[A-Z2-7]{32}$/.test(shownSecret), 'security panel shows the setup key for the authenticator app');
+  await page.locator('.ad-mfa input.ad-code').fill(totpAt(shownSecret));
+  await page.getByRole('button', {name: 'تفعيل'}).click();
+  await page.locator('.ad-codes li').first().waitFor({timeout: 10000});
+  ok(await page.locator('.ad-codes li').count() === 8, 'enabling shows 8 one-time recovery codes');
+  await page.getByRole('button', {name: 'حفظتها، متابعة'}).click();
+  await page.locator('.ad-mfa .ad-badge.good').first().waitFor({timeout: 10000});
+  ok(true, 'security panel now reports two-factor authentication as enabled');
+
   // ---- sign out ----
   await page.getByRole('button', {name: /خروج/}).click();
   await page.locator('form.ad-login').waitFor({timeout: 10000});
@@ -124,6 +139,23 @@ try {
   await page.reload();
   await page.locator('form.ad-login').waitFor({timeout: 10000});
   ok(true, 'after reload the session is gone (cookie invalidated server-side)');
+
+  // ---- two-step sign-in through the UI ----
+  await page.locator('form.ad-login input[type=email]').fill(ownerEmail);
+  await page.locator('form.ad-login input[type=password]').fill(PW);
+  await page.locator('form.ad-login button[type=submit]').click();
+  await page.getByRole('heading', {name: 'التحقق بخطوتين'}).waitFor({timeout: 10000});
+  ok(true, 'after the password, the UI asks for the authenticator code');
+  await page.locator('form.ad-login input.ad-code').fill('000000');
+  await page.locator('form.ad-login button[type=submit]').click();
+  await page.getByText('الرمز غير صحيح.').waitFor({timeout: 10000});
+  ok(true, 'a wrong code shows an error and keeps the code step');
+  await page.locator('form.ad-login input.ad-code').fill(totpAt(shownSecret, Date.now() + 30000));
+  await page.locator('form.ad-login button[type=submit]').click();
+  await page.getByRole('heading', {name: 'لوحة التشغيل'}).waitFor({timeout: 10000});
+  ok(true, 'the correct code opens the console');
+  await page.getByRole('button', {name: /خروج/}).click();
+  await page.locator('form.ad-login').waitFor({timeout: 10000});
 
   // ---- viewer: read-only UI ----
   await page.locator('form.ad-login input[type=email]').fill(viewerEmail);

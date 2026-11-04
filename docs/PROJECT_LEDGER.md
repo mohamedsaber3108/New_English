@@ -23,7 +23,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | 4 | Learning engine depth: review (SM-2) DONE; placement, writing, recommendation | IN PROGRESS |
 | 5 | Persistence: PostgreSQL migration behind existing API contracts | DONE (document model) |
 | 6 | Scale: Redis sessions/cache, stateless app, WS coordination | TODO |
-| 7 | Admin/operations UI (replace raw JSON viewer) | DONE (MFA pending) |
+| 7 | Admin/operations UI (replace raw JSON viewer) | DONE |
 | 8 | Observability: structured logs, metrics, health/readiness | TODO |
 | 9 | Test matrix: unit, integration, e2e, load | TODO |
 | 10 | Release gates + go-live report | TODO |
@@ -92,7 +92,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Admin accounts + sessions | DONE | `server/admin.js`: individual accounts (scrypt), separate HttpOnly/SameSite=Strict cookie scoped to /api/admin, 8h absolute + 30m idle, disabled admins cut off immediately. `tests/admin.test.mjs` |
 | RBAC | DONE | 5 roles -> 12 permissions, enforced per route server-side; no self role/status change; last active owner protected; only owners grant owner. 403s are audited |
 | Shared admin token | DONE (retired) | off by default; `ADMIN_LEGACY_TOKEN=true` = read-only + audited migration mode |
-| Admin MFA (TOTP) | TODO | not implemented yet - next security item |
+| Admin MFA (TOTP) | DONE | `server/totp.js` (RFC 6238, verified against RFC test vectors), AES-256-GCM sealed secrets (ADMIN_MFA_KEY), two-step login (challenge grants nothing, 5 attempts, 5 min, new token on success), replay protection, 8 hashed one-time recovery codes, disable needs password+code, owner reset (audited), ADMIN_REQUIRE_MFA enrollment gate. Tests: totp.test (27), admin-mfa.test (40), E2E MFA journey. QR code display: TODO (setup key + otpauth link only) |
 | Admin operations UI | DONE | `client/src/Admin.jsx` (lazy chunk): overview + integration status, users, orders, support, leads, audit, admins/roles. Search, filters, pagination, loading/empty/error states, reason-required actions. Browser E2E `tests/e2e/admin.e2e.mjs` (23 checks, Chrome) |
 | User operations | DONE | suspend/reactivate (ends sessions, blocks login), revoke sessions, mark email verified, grant/revoke entitlement |
 | Order operations | DONE | manual activation (unique payment ref, pending_contact only), refund record + entitlement revoke. Does NOT move money: provider refund is manual in the Paymob dashboard |
