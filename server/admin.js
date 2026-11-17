@@ -78,7 +78,7 @@ const paging = req => ({page: req.query.page, pageSize: req.query.pageSize});
 const reasonOf = req => { const r = clean(req.body?.reason, 500); if (r.length < 5) throw Object.assign(Error('A reason of at least 5 characters is required for this action.'), {status: 400}); return r; };
 const httpError = (status, error) => Object.assign(Error(error), {status});
 
-export function adminRouter(customer, {leadsFile, integrations = () => ({})} = {}) {
+export function adminRouter(customer, {leadsFile, integrations = () => ({}), configFindings = () => []} = {}) {
   const router = express.Router();
   const {repo} = customer;
   const db = () => customer.db();
@@ -294,7 +294,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({})} = {
 
   // ---------------- Overview ----------------
   router.get('/admin/overview', requireAdmin('dashboard.read'), async (_req, res) => {
-    try { res.json({...await repo.overview(await db()), integrations: integrations()}); } catch (e) { fail(res, e); }
+    try { res.json({...await repo.overview(await db()), integrations: integrations(), configWarnings: configFindings()}); } catch (e) { fail(res, e); }
   });
 
   // ---------------- Users ----------------
@@ -312,10 +312,12 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({})} = {
     try {
       const d = await db(), u = await repo.users.byId(d, req.params.id);
       if (!u) return res.status(404).json({error: 'User not found.'});
-      const p = u.profile || {};
+      const p = {...(u.profile || {}), ...await customer.learning.progress(d, u)}; // server-computed progress
+      const due = (p.reviews || []).filter(c => c.due <= Date.now()).length;
       res.json({
         user: userRow(u),
-        learning: {level: p.level || null, xp: p.xp || 0, streak: p.streak || 0, sessions: Array.isArray(p.sessions) ? p.sessions.length : 0, reviews: Array.isArray(p.reviews) ? p.reviews.length : 0, lastActive: p.lastActive || null},
+        learning: {level: p.level || null, xp: p.xp || 0, streak: p.streak || 0, sessions: (await repo.learning.history(d, u.id, {pageSize: 1})).total, reviews: (p.reviews || []).length, reviewsDue: due, lastActive: p.lastActive || null, assessedAt: p.assessedAt || null},
+        recentActivity: (p.sessions || []).slice(0, 10).map(({id, title, date, xp}) => ({ref: id, title, date, xp})),
         activeSessions: await repo.sessions.countForUser(d, u.id),
         orders: (await repo.orders.listForUser(d, u.id)).map(({reference, plan, term, amount, status, createdAt, paidAt, expiresAt}) => ({reference, plan, term, amount, status, createdAt, paidAt, expiresAt})),
         tickets: (await repo.tickets.listForUser(d, u.id)).map(({reference, subject, status, category, createdAt}) => ({reference, subject, status, category, createdAt})),

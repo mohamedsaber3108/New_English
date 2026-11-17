@@ -36,7 +36,7 @@ try {
   const port = await freePort();
   server = spawn(process.execPath, ['server/index.js'], {env: {...env, PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe']});
   const origin = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) break; } catch {} await sleep(100); }
+  for (let i = 0; i < 300; i++) { try { if ((await fetch(origin + '/api/health')).ok) break; } catch {} await sleep(100); }
   const api = async (path, {method = 'GET', body, cookie} = {}) => { const r = await fetch(origin + path, {method, headers: {...(body ? {'Content-Type': 'application/json'} : {}), ...(cookie ? {Cookie: cookie} : {})}, body: body ? JSON.stringify(body) : undefined}); let d = {}; try { d = await r.json(); } catch {} return {status: r.status, data: d, cookie: (r.headers.get('set-cookie') || '').split(';')[0]}; };
 
   // Seed one learner with a manual-payment order, through the public API.

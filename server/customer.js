@@ -10,7 +10,9 @@ import {createDb, pgliteDirFromEnv, isUniqueViolation} from './db/index.js';
 import {autoImport} from './db/legacy-import.js';
 import * as repo from './db/repo.js';
 import {log} from './observability.js';
+import {createLearning} from './learning.js';
 
+const learning = createLearning(repo);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const legacyFile = process.env.CUSTOMER_DB_FILE || join(root, 'data', 'customers.json');
 const prices = {essential: {monthly: 300, yearly: 3000}, plus: {monthly: 450, yearly: 4500}};
@@ -131,7 +133,59 @@ export function customerRouter() {
     res.json({ok: true});
   });
 
-  router.get('/customer/me', requireUser, (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json({user: publicUser(req.customer), profile: req.customer.profile || null}); });
+  // The profile returned here merges the learner's own settings (name, goal, minutes, self-reported level) with
+  // progress COMPUTED on the server from stored activities, review cards and assessments.
+  router.get('/customer/me', requireUser, async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const progress = await learning.progress(await getDb(), req.customer);
+      res.json({user: publicUser(req.customer), profile: {...(req.customer.profile || {}), ...progress}});
+    } catch { res.status(503).json({error: 'الخدمة غير متاحة حاليًا.'}); }
+  });
+
+  // ---------------- Learning records ----------------
+  // Writing learning records is part of the paid learning experience: same entitlement rule as the practice APIs.
+  const requireLearningAccess = (req, res, next) => requireUser(req, res, () => (!enforcementEnabled() || active(req.customer)) ? next() : res.status(402).json({error: 'اشتراك الإنجليزية غير نشط. افتح صفحة حسابك لاختيار باقة.'}));
+  const send = (res, fn) => fn().catch(e => res.status(e.status || 503).json({error: e.status ? e.message : 'تعذر حفظ نشاط التعلم الآن.'}));
+  router.get('/customer/learning/progress', requireUser, (req, res) => send(res, async () => { res.setHeader('Cache-Control', 'no-store'); res.json({progress: await learning.progress(await getDb(), req.customer)}); }));
+  router.post('/customer/learning/activities', requireLearningAccess, (req, res) => send(res, async () => {
+    const r = await learning.recordActivity(await getDb(), req.customer, req.body || {});
+    res.status(r.duplicate ? 200 : 201).json(r);
+  }));
+  router.get('/customer/learning/history', requireUser, (req, res) => send(res, async () => {
+    const db = await getDb(); await learning.ensureImported(db, req.customer);
+    res.json(await repo.learning.history(db, req.customer.id, {page: req.query.page, pageSize: req.query.pageSize}));
+  }));
+  router.get('/customer/learning/reviews', requireUser, (req, res) => send(res, async () => {
+    const db = await getDb(); await learning.ensureImported(db, req.customer);
+    res.json({cards: req.query.due === 'true' ? await repo.learning.dueCards(db, req.customer.id) : await repo.learning.cards(db, req.customer.id)});
+  }));
+  router.post('/customer/learning/reviews', requireLearningAccess, (req, res) => send(res, async () => res.json(await learning.gradeReview(await getDb(), req.customer, req.body))));
+  router.get('/customer/learning/assessments', requireUser, (req, res) => send(res, async () => res.json({assessments: await repo.learning.assessments(await getDb(), req.customer.id)})));
+
+  // Full personal-data export (data portability). Everything stored about the learner, minus secrets
+  // (password hash, session/token hashes).
+  router.get('/customer/export', requireUser, (req, res) => send(res, async () => {
+    const db = await getDb(), u = req.customer;
+    await learning.ensureImported(db, u);
+    const all = [];
+    for (let p = 1; ; p++) { const h = await repo.learning.history(db, u.id, {page: p, pageSize: 100}); all.push(...h.items); if (p >= h.pages) break; }
+    const body = {
+      exportedAt: new Date().toISOString(), format: 'usam-language-export/1',
+      account: {...publicUser(u), status: u.status},
+      learningSettings: u.profile ? Object.fromEntries(Object.entries(u.profile).filter(([k]) => ['name', 'goal', 'minutes', 'assessmentDone', 'level', 'skills'].includes(k))) : null,
+      progress: await learning.progress(db, u),
+      activities: all,
+      reviewCards: await repo.learning.cards(db, u.id),
+      assessments: await repo.learning.assessments(db, u.id),
+      orders: await repo.orders.listForUser(db, u.id),
+      supportTickets: await repo.tickets.listForUser(db, u.id),
+      sessions: (await repo.sessions.listForUser(db, u.id)).map(({id, createdAt, lastSeen, device, expires}) => ({id, createdAt, lastSeen, device, expires})),
+    };
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `attachment; filename="usam-language-export-${new Date().toISOString().slice(0, 10)}.json"`);
+    res.json(body);
+  }));
 
   // Edit account identity fields (name, phone). Email changes need re-verification and are not editable here yet.
   router.patch('/customer/account', requireUser, async (req, res) => {
@@ -159,11 +213,16 @@ export function customerRouter() {
   router.put('/customer/profile', requireUser, async (req, res) => {
     const p = req.body?.profile;
     if (!p || typeof p !== 'object' || Array.isArray(p) || JSON.stringify(p).length > 80000) return res.status(400).json({error: 'بيانات التقدم غير صالحة.'});
-    const allowed = ['name', 'goal', 'minutes', 'assessmentDone', 'level', 'skills', 'xp', 'streak', 'lastActive', 'evidence', 'sessions', 'completed', 'reviews'];
+    // Only the learner's own settings are accepted. XP, streak, sessions, evidence, completed and review cards are
+    // computed on the server from learning records and are ignored here (they can no longer be set by the browser).
+    const allowed = ['name', 'goal', 'minutes', 'assessmentDone', 'level', 'skills'];
     const profile = Object.fromEntries(allowed.filter(k => Object.hasOwn(p, k)).map(k => [k, p[k]]));
-    if (Array.isArray(profile.sessions)) profile.sessions = profile.sessions.slice(0, 60);
-    if (Array.isArray(profile.reviews)) profile.reviews = profile.reviews.slice(0, 500);
-    try { await repo.users.update(await getDb(), req.customer.id, {profile}); res.json({ok: true}); }
+    try {
+      const db = await getDb();
+      await learning.ensureImported(db, req.customer); // convert any legacy blob before it is replaced
+      await repo.users.update(db, req.customer.id, {profile});
+      res.json({ok: true});
+    }
     catch { res.status(503).json({error: 'تعذر حفظ التقدم الآن.'}); }
   });
 
@@ -248,7 +307,7 @@ export function customerRouter() {
   });
 
   return {
-    router, throttle, rateLimitStatus: () => authLimiter.status(), requireUser, active, sessionFromRequest, db: getDb, repo,
+    router, throttle, rateLimitStatus: () => authLimiter.status(), requireUser, active, sessionFromRequest, db: getDb, repo, learning,
     publicUser, clean, hash, passwordHash, checkPassword, paymentEnabled, accessMode, enforcementEnabled,
     storageBackend: () => backendName, storageHealth: async () => (await getDb()).health(), storageClose: async () => { if (dbPromise) await (await dbPromise).close(); },
     hasAccess: async req => { if (!enforcementEnabled()) return true; const found = await sessionFromRequest(req); return active(found?.user); },

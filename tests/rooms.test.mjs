@@ -18,7 +18,7 @@ async function start(dir, extra = {}) {
   const child = spawn(process.execPath, ['server/index.js'], {env: {...process.env, PORT: String(port), CUSTOMER_DB_FILE: join(dir, port + '.json'), LEADS_FILE: join(dir, 'l.jsonl'), NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN, ...extra}, stdio: ['ignore', 'ignore', 'pipe']});
   procs.push(child);
   const origin = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, port}; } catch {} await sleep(100); }
+  for (let i = 0; i < 300; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, port}; } catch {} await sleep(100); }
   throw Error('server did not start');
 }
 

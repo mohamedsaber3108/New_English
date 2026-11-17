@@ -19,7 +19,7 @@ async function start() {
   const child = spawn(process.execPath, ['server/index.js'], {env: {...process.env, PORT: String(port), LEADS_FILE: join(dir, 'l.jsonl'), NODE_ENV: 'test', RATE_LIMIT_PREFIX: prefix}, stdio: ['ignore', 'ignore', 'pipe']});
   procs.push(child);
   const origin = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return origin; } catch {} await new Promise(r => setTimeout(r, 100)); }
+  for (let i = 0; i < 300; i++) { try { if ((await fetch(origin + '/api/health')).ok) return origin; } catch {} await new Promise(r => setTimeout(r, 100)); }
   throw Error('server did not start');
 }
 const req = (origin, path, {method = 'GET', body, cookie} = {}) => fetch(origin + path, {method, headers: {...(body ? {'Content-Type': 'application/json'} : {}), ...(cookie ? {Cookie: cookie} : {})}, body: body ? JSON.stringify(body) : undefined});

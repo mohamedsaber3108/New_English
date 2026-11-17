@@ -30,7 +30,7 @@ async function start(name) {
   const child = spawn(process.execPath, ['server/index.js'], {env: {...env(name), PORT: String(port)}, stdio: ['ignore', 'ignore', 'pipe', 'ipc']});
   procs.push(child);
   const origin = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 150; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, child}; } catch {} await sleep(100); }
+  for (let i = 0; i < 300; i++) { try { if ((await fetch(origin + '/api/health')).ok) return {origin, child}; } catch {} await sleep(100); }
   throw Error('server did not start');
 }
 const call = async (o, path, {method = 'GET', body, cookie} = {}) => { const r = await fetch(o + path, {method, headers: {...(body ? {'Content-Type': 'application/json'} : {}), ...(cookie ? {Cookie: cookie} : {})}, body: body ? JSON.stringify(body) : undefined}); let data = {}; try { data = await r.json(); } catch {} return {status: r.status, data, cookie: (r.headers.get('set-cookie') || '').split(';')[0]}; };
@@ -43,11 +43,13 @@ try {
   ok(await cli(src, ['--email', ownerEmail, '--name', 'Owner', '--role', 'owner']) === 0, 'owner created in the source database');
   let S = await start(src);
   const reg = await call(S.origin, '/api/customer/register', {method: 'POST', body: {name: 'Rania Restore', email: learnerEmail, phone: '01000000000', password: PW}});
-  await call(S.origin, '/api/customer/profile', {method: 'PUT', cookie: reg.cookie, body: {profile: {xp: 777, level: 'B1', reviews: [{word: 'backup', interval: 6, ease: 2.5, due: Date.now()}]}}});
+  await call(S.origin, '/api/customer/profile', {method: 'PUT', cookie: reg.cookie, body: {profile: {goal: 'Career & interviews', level: 'B1'}}});
   const order = (await call(S.origin, '/api/customer/orders', {method: 'POST', cookie: reg.cookie, body: {plan: 'plus', term: 'yearly', language: 'English'}})).data.reference;
   const ow = await call(S.origin, '/api/admin/auth/login', {method: 'POST', body: {email: ownerEmail, password: PW}});
   const act = await call(S.origin, `/api/admin/orders/${order}/activate`, {method: 'POST', cookie: ow.cookie, body: {paymentReference: 'BANK-' + RUN, reason: 'reconciled before backup'}});
-  ok(act.status === 200, 'source: learner registered, progress saved, order paid via admin');
+  // Real practice through the learning API (progress is server-computed; the browser cannot set XP).
+  const practice = await call(S.origin, '/api/customer/learning/activities', {method: 'POST', cookie: reg.cookie, body: {clientId: 'drill-' + RUN, ref: 'airport', title: 'The airport', words: ['backup', 'gate']}});
+  ok(act.status === 200 && practice.status === 201, 'source: learner registered, order paid via admin, practice recorded');
   const srcAudit = (await call(S.origin, '/api/admin/audit/verify', {cookie: ow.cookie})).data;
   await stopServer(S.child);
 
@@ -74,7 +76,7 @@ try {
   const li = await call(S.origin, '/api/customer/login', {method: 'POST', body: {email: learnerEmail, password: PW}});
   ok(li.status === 200, 'restored: the learner signs in with their original password');
   const me = await call(S.origin, '/api/customer/me', {cookie: li.cookie});
-  ok(me.data.profile?.xp === 777 && me.data.profile.reviews?.[0]?.word === 'backup', 'restored: learning progress and review cards are intact');
+  ok(me.data.profile?.xp === 25 && me.data.profile.sessions?.[0]?.id === 'airport' && me.data.profile.reviews?.some(r => r.word === 'backup') && me.data.profile.goal === 'Career & interviews', 'restored: learning history, XP, review cards and settings are intact');
   ok((await call(S.origin, '/api/feedback', {method: 'POST', cookie: li.cookie, body: {text: 'Restored access works.'}})).status === 200, 'restored: the paid entitlement still unlocks content');
   ok((await call(S.origin, '/api/customer/me', {cookie: reg.cookie})).status === 200, 'restored: sessions issued before the backup are still valid');
   const ow2 = await call(S.origin, '/api/admin/auth/login', {method: 'POST', body: {email: ownerEmail, password: PW}});

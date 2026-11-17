@@ -1,6 +1,6 @@
 // Database layer tests: migrations, constraints, transactions, row-level concurrency, data-dir lock.
 // Runs on PGlite always; on PostgreSQL too when DATABASE_URL is set (isolated throwaway database).
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
@@ -73,7 +73,9 @@ try {
       const name2 = name + '_race'; await admin.query(`CREATE DATABASE ${name2}`);
       const u2 = new URL(process.env.DATABASE_URL); u2.pathname = '/' + name2;
       const dbs = await Promise.all(Array.from({length: 4}, () => createDb({databaseUrl: u2.toString()})));
-      ok(dbs.reduce((n, d) => n + d.applied.length, 0) === 1, 'postgres: 4 instances starting together apply the migration exactly once');
+      const migrationFiles = (await readdir('server/db/migrations')).filter(f => f.endsWith('.sql')).length;
+      const appliedAll = dbs.flatMap(d => d.applied);
+      ok(appliedAll.length === migrationFiles && new Set(appliedAll).size === migrationFiles, `postgres: 4 instances starting together apply each of the ${migrationFiles} migrations exactly once`);
       await Promise.all(dbs.map(d => d.close()));
       await admin.query(`DROP DATABASE IF EXISTS ${name2} WITH (FORCE)`);
     } finally { await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); await admin.end(); }

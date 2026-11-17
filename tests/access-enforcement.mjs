@@ -17,7 +17,7 @@ function startServer(extraEnv){
 }
 
 async function waitReady(origin){
-  for(let i=0;i<150;i++){try{if((await fetch(origin+'/api/health')).ok)return true}catch{}await new Promise(r=>setTimeout(r,100))}
+  for(let i=0;i<300;i++){try{if((await fetch(origin+'/api/health')).ok)return true}catch{}await new Promise(r=>setTimeout(r,100))}
   throw Error('server did not start');
 }
 

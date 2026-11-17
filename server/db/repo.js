@@ -13,7 +13,7 @@ const paged = (rows, total, {page: pg, pageSize}) => ({items: rows, total, page:
 const clean = o => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
 
 // ---------------------------------------------------------------- users + entitlements
-const USER_COLS = `u.id, u.email, u.name, u.phone, u.password, u.status, u.email_verified, u.preferences, u.profile, u.created_at,
+const USER_COLS = `u.id, u.email, u.name, u.phone, u.password, u.status, u.email_verified, u.preferences, u.profile, u.created_at, u.learning_imported,
   COALESCE((SELECT json_agg(json_build_object('language', e.language, 'plan', e.plan, 'expiresAt', e.expires_at, 'orderReference', e.order_reference,
     'source', e.source, 'grantedBy', e.granted_by, 'grantedAt', e.granted_at)) FROM entitlements e WHERE e.user_id = u.id), '[]'::json) AS ents`;
 function toUser(r) {
@@ -22,7 +22,7 @@ function toUser(r) {
   const entitlements = {};
   for (const e of ents) { const {language, ...rest} = e; entitlements[language] = clean({...rest, expiresAt: num(rest.expiresAt), grantedAt: rest.grantedAt ? iso(rest.grantedAt) : null}); }
   return {id: r.id, email: r.email, name: r.name, phone: r.phone, password: r.password, status: r.status, emailVerified: !!r.email_verified,
-    preferences: r.preferences || {product: true, learning: true, marketing: false}, profile: r.profile ?? null, createdAt: iso(r.created_at), entitlements};
+    preferences: r.preferences || {product: true, learning: true, marketing: false}, profile: r.profile ?? null, createdAt: iso(r.created_at), learningImported: !!r.learning_imported, entitlements};
 }
 export const users = {
   async byId(q, id) { return toUser((await q.query(`SELECT ${USER_COLS} FROM users u WHERE u.id = $1`, [id])).rows[0]); },
@@ -257,6 +257,61 @@ export const audit = {
     const legacy = Number((await q.query('SELECT count(*) AS n FROM audit_log WHERE hash IS NULL')).rows[0].n);
     return v.finish({legacy});
   },
+};
+
+// ---------------------------------------------------------------- learning records
+const toActivity = r => r && {id: r.id, ref: r.ref, kind: r.kind, title: r.title, skill: r.skill, words: r.words || [], summary: r.summary, metrics: r.metrics || {}, xp: num(r.xp), day: r.day, createdAt: iso(r.created_at)};
+const toCard = r => ({word: r.word, reps: num(r.reps), interval: num(r.interval_days), ease: num(r.ease), due: num(r.due), lapses: num(r.lapses), lastReviewed: num(r.last_reviewed)});
+export const learning = {
+  // Row lock on the learner: serializes one learner's learning writes (daily caps, card limits stay exact).
+  async lockUser(q, userId) { await q.query('SELECT 1 FROM users WHERE id = $1 FOR UPDATE', [userId]); },
+  // Returns the current import flag under a row lock (null when the user no longer exists).
+  async lockImportFlag(q, userId) { const r = (await q.query('SELECT learning_imported FROM users WHERE id = $1 FOR UPDATE', [userId])).rows[0]; return r ? !!r.learning_imported : null; },
+  async setImported(q, userId) { await q.query('UPDATE users SET learning_imported = true WHERE id = $1', [userId]); },
+  async insertActivity(q, a) {
+    await q.query(`INSERT INTO learning_activities (id, user_id, client_id, kind, ref, title, skill, words, summary, metrics, xp, day, created_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10::jsonb,$11,$12,$13)`,
+      [a.id, a.userId, a.clientId, a.kind, a.ref, a.title, a.skill, J(a.words || []), a.summary || '', J(a.metrics || {}), a.xp, a.day, a.createdAt]);
+  },
+  async byClientId(q, userId, clientId) { return toActivity((await q.query('SELECT * FROM learning_activities WHERE user_id = $1 AND client_id = $2', [userId, clientId])).rows[0]); },
+  async countXpActivitiesOnDay(q, userId, day) { return Number((await q.query("SELECT count(*) AS n FROM learning_activities WHERE user_id = $1 AND day = $2 AND xp > 0 AND kind <> 'legacy'", [userId, day])).rows[0].n); },
+  async totalXp(q, userId) { return Number((await q.query('SELECT COALESCE(sum(xp), 0) AS n FROM learning_activities WHERE user_id = $1', [userId])).rows[0].n); },
+  async activeDays(q, userId) { return (await q.query("SELECT DISTINCT day FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' ORDER BY day DESC LIMIT 400", [userId])).rows.map(r => r.day); },
+  async lastActivityAt(q, userId) { return (await q.query("SELECT max(created_at) AS t FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy'", [userId])).rows[0].t; },
+  async recentActivities(q, userId, limit) { return (await q.query("SELECT * FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' ORDER BY created_at DESC, id LIMIT $2", [userId, limit])).rows.map(toActivity); },
+  async history(q, userId, {page: p, pageSize} = {}) {
+    const pg = page(p, pageSize);
+    const total = Number((await q.query("SELECT count(*) AS n FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy'", [userId])).rows[0].n);
+    const rows = (await q.query(`SELECT * FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' ORDER BY created_at DESC, id LIMIT ${pg.pageSize} OFFSET ${pg.offset}`, [userId])).rows.map(toActivity);
+    return paged(rows, total, pg);
+  },
+  async evidence(q, userId) { return Object.fromEntries((await q.query("SELECT skill, count(*) AS n FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' GROUP BY skill", [userId])).rows.map(r => [r.skill, Number(r.n)])); },
+  // All aggregates in ONE round trip (xp, active days for the streak, evidence per skill, completed refs, last activity).
+  async summary(q, userId) {
+    const r = (await q.query(`SELECT
+      (SELECT COALESCE(sum(xp), 0) FROM learning_activities WHERE user_id = $1) AS xp,
+      (SELECT COALESCE(json_agg(day ORDER BY day DESC), '[]'::json) FROM (SELECT DISTINCT day FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' ORDER BY day DESC LIMIT 400) d) AS days,
+      (SELECT COALESCE(json_object_agg(skill, n), '{}'::json) FROM (SELECT skill, count(*) AS n FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' GROUP BY skill) e) AS evidence,
+      (SELECT COALESCE(json_agg(ref ORDER BY ref), '[]'::json) FROM (SELECT DISTINCT ref FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy') c) AS completed,
+      (SELECT max(created_at) FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy') AS last`, [userId])).rows[0];
+    const j = v => typeof v === 'string' ? JSON.parse(v) : v;
+    return {xp: Number(r.xp), days: j(r.days), evidence: Object.fromEntries(Object.entries(j(r.evidence)).map(([k, v]) => [k, Number(v)])), completed: j(r.completed), last: r.last};
+  },
+  async completedRefs(q, userId) { return (await q.query("SELECT DISTINCT ref FROM learning_activities WHERE user_id = $1 AND kind <> 'legacy' ORDER BY ref", [userId])).rows.map(r => r.ref); },
+  async cards(q, userId) { return (await q.query('SELECT * FROM review_cards WHERE user_id = $1 ORDER BY due, word', [userId])).rows.map(toCard); },
+  async dueCards(q, userId, now = Date.now()) { return (await q.query('SELECT * FROM review_cards WHERE user_id = $1 AND due <= $2 ORDER BY due, word', [userId, now])).rows.map(toCard); },
+  async cardCount(q, userId) { return Number((await q.query('SELECT count(*) AS n FROM review_cards WHERE user_id = $1', [userId])).rows[0].n); },
+  async cardForUpdate(q, userId, word) { const r = (await q.query('SELECT * FROM review_cards WHERE user_id = $1 AND word = $2 FOR UPDATE', [userId, word])).rows[0]; return r ? toCard(r) : null; },
+  // onlyIfMissing: insert a new card, never overwrite an existing one. Returns true when a row was written.
+  async upsertCard(q, userId, c, now, {onlyIfMissing = false, reviewed = false} = {}) {
+    const r = await q.query(`INSERT INTO review_cards (user_id, word, reps, interval_days, ease, due, lapses, last_reviewed, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      ON CONFLICT (user_id, word) DO ${onlyIfMissing ? 'NOTHING' : 'UPDATE SET reps = EXCLUDED.reps, interval_days = EXCLUDED.interval_days, ease = EXCLUDED.ease, due = EXCLUDED.due, lapses = EXCLUDED.lapses, last_reviewed = EXCLUDED.last_reviewed'}`,
+      [userId, c.word, c.reps | 0, c.interval | 0, c.ease, c.due, c.lapses | 0, reviewed ? now : null, now]);
+    return r.rowCount > 0;
+  },
+  async insertAssessment(q, a) { await q.query('INSERT INTO assessments (id, user_id, kind, answers, result, created_at) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)', [a.id, a.userId, a.kind, J(a.answers), J(a.result), a.createdAt]); },
+  async latestAssessment(q, userId) { const r = (await q.query('SELECT * FROM assessments WHERE user_id = $1 ORDER BY created_at DESC, id LIMIT 1', [userId])).rows[0]; return r ? {id: r.id, kind: r.kind, result: r.result, createdAt: iso(r.created_at)} : null; },
+  async assessments(q, userId) { return (await q.query('SELECT id, kind, result, created_at FROM assessments WHERE user_id = $1 ORDER BY created_at DESC, id LIMIT 50', [userId])).rows.map(r => ({id: r.id, kind: r.kind, result: r.result, createdAt: iso(r.created_at)})); },
 };
 
 // ---------------------------------------------------------------- analytics + meta + aggregates
