@@ -7,11 +7,11 @@ Wants=network-online.target
 Type=oneshot
 User=usam-language
 Group=usam-language
-WorkingDirectory=/opt/usam-language
+WorkingDirectory=/opt/usam-language/current
 # Needs DATABASE_URL; optional BACKUP_DIR, BACKUP_RETENTION_DAYS, BACKUP_S3_URI (requires the AWS CLI and an
 # instance role allowing s3:PutObject on that prefix).
 EnvironmentFile=/etc/usam-language.env
-ExecStart=/opt/usam-language/scripts/backup.sh /var/backups/usam-language
+ExecStart=/opt/usam-language/current/scripts/backup.sh /var/backups/usam-language
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

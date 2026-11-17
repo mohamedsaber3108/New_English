@@ -8,7 +8,8 @@ Wants=network-online.target
 Type=simple
 User=usam-language
 Group=usam-language
-WorkingDirectory=/opt/usam-language
+# `current` is a symlink to the active release (scripts/deploy.sh); systemd resolves it at each start.
+WorkingDirectory=/opt/usam-language/current
 EnvironmentFile=/etc/usam-language.env
 ExecStart=/usr/bin/node server/index.js
 # Graceful shutdown: the app drains in-flight requests (max 5 s), closes WebSockets and the database on SIGTERM.

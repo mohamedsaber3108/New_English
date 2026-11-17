@@ -23,7 +23,7 @@ const BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 const counters = new Map();   // key -> number
 const histos = new Map();     // key -> {buckets: number[], sum, count}
 const labelKey = labels => Object.entries(labels).sort().map(([k, v]) => `${k}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`).join(',');
-function inc(name, labels = {}, by = 1) { const k = name + '{' + labelKey(labels) + '}'; counters.set(k, (counters.get(k) || 0) + by); }
+export function inc(name, labels = {}, by = 1) { const k = name + '{' + labelKey(labels) + '}'; counters.set(k, (counters.get(k) || 0) + by); }
 function observe(name, labels, seconds) {
   const k = name + '{' + labelKey(labels) + '}';
   let h = histos.get(k);
@@ -90,6 +90,10 @@ export function metricsHandler(gauges = () => ({})) {
     for (const name of ['http_unhandled_errors_total', 'process_unhandled_rejections_total']) {
       out.push(`# TYPE ${name} counter`, `${name} ${counters.get(name + '{}') || 0}`);
     }
+    // Every other counter (e.g. ai_requests_total, ai_tokens_total for cost monitoring), grouped by metric name.
+    const other = new Map();
+    for (const [k, v] of counters) { const name = k.slice(0, k.indexOf('{')); if (name === 'http_requests_total' || name === 'http_unhandled_errors_total' || name === 'process_unhandled_rejections_total') continue; if (!other.has(name)) other.set(name, []); other.get(name).push(`${k.endsWith('{}') ? name : k} ${v}`); }
+    for (const [name, lines] of other) out.push(`# TYPE ${name} counter`, ...lines);
     out.push('# HELP http_request_duration_seconds Request latency.', '# TYPE http_request_duration_seconds histogram');
     for (const h of histos.values()) {
       const l = labelKey(h.labels);
