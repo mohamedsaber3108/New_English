@@ -2,6 +2,18 @@
 
 React (Vite) and Node (Express) application for the USAM Language paid English learning product. Arabic-first acquisition pages, English learner workspace, admin console at `#admin`.
 
+## Project structure
+
+| Folder | Contents |
+|---|---|
+| `client/` | React app: learner workspace (`main.jsx`), marketing pages, account, admin console (`Admin.jsx`), styles, fonts |
+| `server/` | Express API: accounts, payments, learning records, AI adapter, admin/RBAC/audit/MFA, rooms, rate limits, observability |
+| `server/db/` | PostgreSQL / PGlite connection, repository, SQL migrations, legacy import |
+| `tests/` | API and unit suites, browser E2E (`tests/e2e`), load generator (`tests/load`) |
+| `scripts/` | admin CLI, manual activation, backup/restore, release deploy, dependency check |
+| `deploy/` | Nginx config, systemd service and backup timer |
+| `docs/` | deployment guide, project ledger, traceability matrix, runbooks, load-test results, product blueprint |
+
 ## Develop and verify
 
 ```bash
