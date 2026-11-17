@@ -12,6 +12,7 @@ credential to function · **Guard** = access-gated by `paid()` (entitlement requ
 |---|---|---|---|---|
 | `/api/health` | GET | `App` (health check on load) | liveness + feature flags | Live |
 | `/api/ready` | GET | load balancer (readiness probe) | storage reachability | Live |
+| `/api/metrics` | GET | Prometheus scraper (Bearer METRICS_TOKEN) | metrics; disabled when unset | Live |
 
 ## Marketing / lead capture
 
@@ -31,7 +32,13 @@ credential to function · **Guard** = access-gated by `paid()` (entitlement requ
 | `/api/customer/me` | GET | `App`, `Account` | current user + profile | Live |
 | `/api/customer/account` | PATCH | `AccountTools` | edit name/phone | Live |
 | `/api/customer/password/change` | POST | `AccountTools` | change password (revokes other sessions) | Live |
-| `/api/customer/profile` | PUT | `App` (autosave) | persist learner profile/progress | Live |
+| `/api/customer/profile` | PUT | `App` (autosave) | persist learner preferences (XP/streak fields are ignored; computed server-side) | Live |
+| `/api/customer/learning/activities` | POST | `App` `award()` | record a completed activity; server computes XP, streak, skills | Live |
+| `/api/customer/learning/reviews` | GET/POST | `Review` | SM-2 review cards (due list, grade) | Live |
+| `/api/customer/learning/progress` | GET | (API; same data returned by activities POST) | server-computed progress | Live |
+| `/api/customer/learning/history` | GET | (API) | activity history, paginated | Live |
+| `/api/customer/learning/assessments` | GET | (API) | placement results | Live |
+| `/api/customer/export` | GET | `Settings` (download my data) | personal data export (JSON) | Live |
 | `/api/customer/orders` | GET | `Account` | list orders | Live |
 | `/api/customer/orders` | POST | `Account` → `Plans` | create order / start checkout | Cfg (Paymob) |
 | `/api/customer/access` | GET | (entitlement check) | english/plus entitlement | Live |
@@ -63,7 +70,7 @@ credential to function · **Guard** = access-gated by `paid()` (entitlement requ
 | `/api/recommendation` | POST | dashboard next-step | weakest-skill recommendation | Live · Guard |
 | `/api/simulation` | POST | `World` | simulation turn (guided fallback + live) | Live (guided) / Cfg (OpenAI) · Guard |
 | `/api/report` | POST | `World` | session report | Live · Guard |
-| `/api/coach` | POST | `Coach` | live AI tutor | Cfg (OpenAI) · Guard (plus) |
+| `/api/coach` | POST | `Coach` | live AI tutor (timeout/retry, daily per-learner quota) | Cfg (OpenAI) · Guard (plus) |
 | `/api/rooms` (WS) | WebSocket | `Group` | group text room (≤4) | Live · Guard |
 
 ## Admin (`admin.js`, individual accounts + RBAC; UI `Admin.jsx`)
@@ -104,10 +111,10 @@ recorded in the tamper-evident audit chain. Tests: `tests/admin.test.mjs` (API),
 | `/api/admin/admins/:id` | PATCH | admins.write | change role / disable | Live |
 
 ## Gaps identified (tracked in PROJECT_LEDGER.md)
-
-- Account/profile **edit** (name/phone) and **change password**: DONE. Email change (re-verify) deferred.
-- Receipt/invoice **printable** page: API exists; UI is an `alert()` (PARTIAL).
-- Admin operations UI, RBAC, lead management, admin MFA (TOTP): DONE. QR code for MFA setup: TODO.
+- Account/profile edit and change password: DONE. Email change (re-verify): deferred.
+- Receipt view: DONE (receipt card in Account). Tax-invoice format needs legal/tax review.
+- Admin operations UI, RBAC, lead management, admin MFA (TOTP): DONE. QR code for MFA setup: TODO (setup key + otpauth link only).
 - Calendar booking for meeting leads: TODO (leads record a preferred time; staff confirm manually).
-- Rate limiting and rooms are Redis-shared when `REDIS_URL` is set (DONE).
-- Core data is still a single document per deployment (JSON file or one PostgreSQL row) - normalized tables needed for write throughput at the 100k target (TODO, highest backend priority).
+- Rate limiting and rooms are Redis-shared when `REDIS_URL` is set: DONE.
+- Storage: relational tables (migrations 001-002) on PostgreSQL / PGlite: DONE.
+- Progress/history/assessments endpoints have no dedicated UI screen yet (data reaches the UI through the activities response and the export).

@@ -18,15 +18,15 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 |---|---|---|
 | 0 | Baseline + Git + verified build/smoke | DONE |
 | 1 | Critical security: access enforcement decoupled from payment | DONE |
-| 2 | Deliverable docs: inventory, engine registry, API inventory, RTM | IN PROGRESS |
-| 3 | Frontend correctness: 404/error pages, single pricing source | TODO |
-| 4 | Learning engine depth: review (SM-2) DONE; placement, writing, recommendation | IN PROGRESS |
-| 5 | Persistence: PostgreSQL migration behind existing API contracts | DONE (document model) |
-| 6 | Scale: Redis sessions/cache, stateless app, WS coordination | TODO |
+| 2 | Deliverable docs: inventory, engine registry, API inventory, RTM | DONE (TRACEABILITY_MATRIX, DEPLOYMENT, runbooks) |
+| 3 | Frontend correctness: 404/error pages, single pricing source | DONE |
+| 4 | Learning engine depth: review (SM-2), server-side learning records DONE; placement, writing, recommendation | PARTIAL (heuristic engines) |
+| 5 | Persistence: PostgreSQL migration behind existing API contracts | DONE (relational tables) |
+| 6 | Scale: Redis sessions/cache, stateless app, WS coordination | DONE (code + local tests); production capacity unmeasured |
 | 7 | Admin/operations UI (replace raw JSON viewer) | DONE |
 | 8 | Observability: structured logs, metrics, health/readiness | DONE (alerting needs infra) |
-| 9 | Test matrix: unit, integration, e2e, load | TODO |
-| 10 | Release gates + go-live report | TODO |
+| 9 | Test matrix: unit, integration, e2e, load | DONE locally: 403 default / 514 PG+Redis / 46 browser E2E; laptop load baseline |
+| 10 | Release gates + go-live report | DONE (docs/DEPLOYMENT.md checklist); go-live BLOCKED on external inputs |
 
 ---
 
@@ -34,7 +34,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 
 | Item | Status | Evidence / Notes |
 |---|---|---|
-| React (Vite) build | DONE | `npx vite build` → 1,586 modules, passes |
+| React (Vite) build | DONE | `npm run build:app` (production) and `npm run build` (static preview, `--mode static`, cross-platform) pass |
 | Node/Express server syntax | DONE | `npm run check` passes |
 | API smoke test | DONE | `tests/api-smoke.mjs` passes |
 | Git baseline + checkpoints | DONE | commits `6c6023a`, `588835e` |
@@ -63,9 +63,9 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Paymob hosted checkout | BLOCKED | code done; needs PAYMOB_* keys + merchant sandbox tests |
 | Webhook HMAC verification | DONE (code) | server-side price/HMAC check; needs live reconciliation test |
 | Entitlement model + expiry | DONE | `active()`; enforced via `paid()` gate |
-| Single pricing source of truth | PARTIAL | prices duplicated in server + Customer.jsx + Pricing copy |
+| Single pricing source of truth | DONE | server catalog is the source; clients render `/api/customer/catalog` |
 | Billing/cancel portal | TODO | fixed-period model; no renewal/cancel UI |
-| Printable receipt/invoice | PARTIAL | API exists; UI only `alert()` |
+| Receipt view | DONE | `GET /customer/receipts/:reference` rendered as a receipt card in Account. Tax invoice format: needs legal/tax review |
 
 ## 4. Learning engines
 
@@ -75,15 +75,16 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Skill-level profile (per-skill) | PARTIAL | per-skill estimates exist; not evidence-weighted over time |
 | Adaptive recommendation | PARTIAL | weakest-skill heuristic in `engine.js`/`main.jsx` |
 | Curriculum / learning path | PARTIAL | static units in `data.js`, not DB-driven |
-| AI coach (text) | BLOCKED | OpenAI code done + guided fallback; needs OPENAI_API_KEY |
+| AI coach (text) | BLOCKED | `server/ai.js` adapter: timeout + one retry on 429/5xx, reply-length cap, per-learner daily quota, scenarios taken from the server copy (prompt-injection guard). `tests/ai.test.mjs` against a fake provider only. Live calls need OPENAI_API_KEY (not used) |
 | Live simulation (dynamic) | PARTIAL/BLOCKED | guided fallback works; live mode needs OpenAI |
 | Writing evaluation | PARTIAL | regex heuristics in `assessText`; no real grammar engine |
 | Pronunciation | PARTIAL | browser Web Speech transcript compare; no phoneme scoring |
 | Interactive stories | PARTIAL | one 3-step story |
 | Spaced repetition / review | DONE | SM-2 engine `server/scheduler.js`, 35 unit tests, shared client+server; FSRS upgrade path documented in module |
 | Group rooms | PARTIAL | text rooms now multi-instance + flood-limited + identity-safe (tested). Still missing: voice (needs WebRTC/LiveKit infra), moderation/reporting, session reports |
-| Gamification (XP/streak) | DONE | client-side; persisted to profile |
-| Progress analytics | PARTIAL | session list + skill estimates; no deep analytics |
+| Gamification (XP/streak) | DONE | computed server-side from `learning_activities` (migration 002); browser can no longer set XP/streak; daily XP cap (LEARNING_DAILY_XP_ACTIVITIES); streak on the Cairo calendar day. `tests/learning.test.mjs` |
+| Progress analytics | PARTIAL | server progress/history/assessments endpoints + data export (`GET /customer/export`); no deep analytics UI |
+| Review cards (SM-2) persistence | DONE | `review_cards` table, `GET/POST /customer/learning/reviews` |
 
 ## 5. Admin & operations
 
@@ -112,8 +113,7 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 | Room safety | DONE | account name overrides spoofable query name; 20 msgs/10s per connection; ping/pong drops dead sockets; 4KB max payload; entitlement enforced on connect |
 | Object storage for media | TODO | no uploads today |
 | Background workers / queue | TODO | none |
-| Load balancer + health/readiness | PARTIAL | `/api/health` exists; no readiness split, no LB config |
-| WebSocket shared coordination | TODO | rooms in Node memory (single instance only) |
+| Health/readiness + proxy config | DONE | `/api/health` (liveness), `/api/ready` (database), `deploy/nginx.conf` incl. WebSocket. Load balancer itself: BLOCKED on infrastructure |
 | Structured logs / metrics | DONE (local) | `server/observability.js`: JSON logs with request ids (no query strings/cookies/PII), Prometheus `/api/metrics` behind METRICS_TOKEN (requests by route template, latency histograms, memory, event-loop lag, DB pool saturation, WS clients), JSON error handler, unhandled-rejection logging. `tests/observability.test.mjs` (20). Alerting/dashboards need the monitoring stack: BLOCKED on infrastructure. Distributed tracing: not implemented |
 | Backup / restore | DONE (local) | `scripts/backup.sh` (pg_dump + validated archive + SHA-256 + retention + optional S3) and `scripts/restore.sh` (checksum check, confirm flag, single transaction); systemd timer; drill `tests/backup-restore.test.mjs` 15/15 on Linux/PG16 (app works on the restored DB, audit chain verifies). Repeat on AWS/RDS: BLOCKED on infrastructure. Runbook: docs/BACKUP_RESTORE.md |
 | Load test + capacity evidence | PARTIAL | Baseline 2 (laptop): 100,000 learners on PostgreSQL, ~2,200 reads/s and ~1,450 writes/s from one process, p99 21-53 ms, 0 failures; throughput independent of data size. Production capacity (multi-instance, RDS, AWS network) BLOCKED on infrastructure |
@@ -132,6 +132,16 @@ A feature is only **DONE** when it works end-to-end, persists required data, han
 
 ---
 
+## 8. Release & deployment
+| Item | Status | Notes |
+|---|---|---|
+| Deployment guide | DONE (not executed on a server) | `docs/DEPLOYMENT.md`: server prep, sudoers rule, RDS, env file, systemd, Nginx/TLS/DNS, Paymob callbacks, backups, monitoring, rollback, pre-launch checklist. Supersedes `docs/EC2.md` |
+| Release script + rollback | DONE (bash -n checked, not run on a server) | `scripts/deploy.sh`: release dirs + `current` symlink, readiness wait, automatic restore of the previous release, `rollback`, keeps 5 releases |
+| Startup configuration check | DONE | `server/config.js`: fatal findings stop the process, warnings logged. `tests/config.test.mjs` |
+| CSP + self-hosted fonts | DONE | strict CSP in `server/index.js`; `@fontsource` fonts (no Google Fonts request) |
+| Dependency audit | DONE | production `npm audit` 0; one dev/build-only picomatch advisory remains |
+| GitHub remote | BLOCKED | repository has no remote and no credentials on this machine |
+---
 ## External dependencies (BLOCKED until supplied)
 
 | Dependency | Needed for | Owner |

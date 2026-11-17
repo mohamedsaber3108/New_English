@@ -1,3 +1,5 @@
+> **Superseded.** This page describes the old single-JSON-file edition. Use [DEPLOYMENT.md](DEPLOYMENT.md).
+
 # EC2 deployment guide
 
 ## Architecture
