@@ -59,8 +59,29 @@ changing their role ends their sessions immediately.
 - Audit → *تحقق من السجل* recomputes the whole chain. A failure names the first broken entry.
 - Rotating the key: move the old value to `AUDIT_HMAC_PREVIOUS_KEYS` (comma-separated), set a new
   `AUDIT_HMAC_KEY`, restart. History keeps verifying.
-- Retention: the newest `AUDIT_MAX_ENTRIES` (default 5000) entries stay in the primary store; older ones are
-  trimmed with a verification anchor. Exporting trimmed entries to cold storage is not yet implemented.
+- Retention (default taken, owner may change: Q-12 / OD-27): 12 months in `audit_log`, then archive-then-delete.
+  `node scripts/audit-retention.mjs` copies rows older than `AUDIT_RETENTION_DAYS` (default 365, minimum 30) to
+  `audit_archive`, deletes them from `audit_log` and moves the chain anchor, so verification still passes. Run it
+  monthly with the **retention** database role. `AUDIT_MAX_ENTRIES` (optional, default off) also caps the hot store.
+  The newest entry is never removed. Archived rows stay in `audit_archive`; export them before dropping that table.
+- Insert-only audit (deploy step, not a migration): run `docs/audit-roles.sql` once as a database administrator
+  with the real role names, for example `psql "$ADMIN_URL" -v app_role=usam_app -v retention_role=usam_audit_retention -f docs/audit-roles.sql`.
+  The app role then can read and add `audit_log` rows and move the chain head (`audit_chain.seq`, `head`), but cannot
+  UPDATE or DELETE `audit_log`. Leave `AUDIT_MAX_ENTRIES` unset for the app (it would need DELETE).
+  The chain head row must stay updatable by the app, so it is protected by the HMAC chain, not by the grant.
+  Try this on a copy first. The app runs migrations at start-up, so run migrations with the table-owner role.
+  `tests/audit-retention.test.mjs` checks the grants when `DATABASE_URL` is set (skipped on PGlite).
+
+## 5b. Sensitive actions (step-up and second approver)
+
+- Refund, manual entitlement grant or revoke, administrator create, role or status change and MFA reset need the
+  password entered again (Admin console asks; valid 5 minutes) and a written reason of at least 5 characters, stored in
+  the audit entry. Without it the API answers 403 `{stepUp:true}`.
+- Refunds and administrator role/status changes also need a **different** administrator with the permission to approve
+  (console: *طلبات الموافقة*, or `POST /api/admin/approvals/:id/approve`). Requests expire after 24 hours. The requester
+  cannot approve. With one owner only, role changes cannot be approved: create a second owner first
+  (`npm run admin:create`).
+- Not built: admin export of a learner's data (no such admin route exists), bulk grants, price changes, API key rotation.
 - Entries reference people by opaque ids only, so deleting a learner account does not rewrite the log.
 
 ## 6. Sessions

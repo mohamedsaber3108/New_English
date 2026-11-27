@@ -93,5 +93,11 @@
 .ad-codes code{font-family:ui-monospace,Consolas,monospace;font-size:15px;color:#e6f6ec}
 
 .ad-config{border-color:#a68a35;background:#2d2814}.ad-config h2{color:#f2d98a;font-size:20px;margin:0}.ad-config ul{margin:8px 0 0;padding-inline-start:18px;display:grid;gap:8px}.ad-config li{line-height:1.6;color:#efe3bf}.ad-config code{background:#1d1a0d;border-radius:6px;padding:1px 6px;margin-inline-end:6px}
+/* A-1: step-up dialog, approvals, idle warning */
+.ad-modal-back{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;z-index:50;padding:16px}
+.ad-modal{width:min(440px,100%);display:grid;gap:12px;max-height:90vh;overflow:auto}
+.ad-modal label{display:grid;gap:6px}
+.ad-approval{display:grid;gap:8px}
+.ad-idle{position:fixed;inset-inline:16px;bottom:16px;z-index:40;display:flex;gap:12px;align-items:center;justify-content:space-between}
 /* U-3: no animation or transition and no smooth scrolling when the visitor asks for reduced motion. */
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

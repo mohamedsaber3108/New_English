@@ -68,7 +68,7 @@ try {
   ok(await page.locator('.ad-metric').count() >= 8, 'overview shows operational metrics');
   ok(await page.getByText('بانتظار بيانات الاعتماد').first().isVisible(), 'overview reports unconfigured providers as awaiting credentials');
   const tabs = await page.locator('.ad-tabs button').allInnerTexts();
-  ok(tabs.length === 7, `owner sees all 7 sections (${tabs.length})`);
+  ok(tabs.length === 8, `owner sees all 8 sections (${tabs.length})`);
 
   // ---- orders: activate the manual payment ----
   await page.getByRole('button', {name: /الطلبات والاشتراكات/}).click();
@@ -109,6 +109,36 @@ try {
   await page.getByRole('button', {name: 'تحقق من السجل'}).click();
   await page.locator('.ad-verify-result.good').waitFor({timeout: 10000});
   ok(/سليم/.test(await page.locator('.ad-verify-result').innerText()), 'audit chain verifies from the UI');
+
+  // ---- step-up dialog (A-1): creating an administrator needs the password again and a written reason ----
+  await page.getByRole('button', {name: /المشرفون والأدوار/}).click();
+  const create = page.locator('form.ad-create');
+  const newEmail = `new-${RUN}@example.com`;
+  const fillCreate = async () => { await create.locator('input').nth(0).fill('New Support'); await create.locator('input[type=email]').fill(newEmail); await create.locator('input[type=password]').fill(PW + '-temp'); };
+  await create.waitFor({timeout: 10000});
+  await fillCreate();
+  await create.getByRole('button', {name: 'إنشاء الحساب'}).click();
+  const dlg = page.getByRole('dialog', {name: 'تأكيد إجراء حساس'});
+  await dlg.waitFor({timeout: 10000});
+  ok(true, 'a sensitive action opens the step-up dialog (labelled dialog)');
+  ok(await dlg.locator('input[type=password]').evaluate(el => el === document.activeElement), 'focus moves into the dialog (password field)');
+  await page.keyboard.press('Escape');
+  await dlg.waitFor({state: 'hidden', timeout: 5000});
+  ok(await page.locator('.ad-table', {hasText: newEmail}).count() === 0, 'Esc closes the dialog (no administrator was created)');
+  await create.getByRole('button', {name: 'إنشاء الحساب'}).click();
+  await dlg.waitFor({timeout: 10000});
+  // focus trap: Tab from the last control wraps to the first
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
+  ok(await dlg.evaluate(el => el.contains(document.activeElement)), 'focus stays inside the dialog while tabbing');
+  await dlg.locator('input[type=password]').fill('wrong-password-000');
+  await dlg.locator('textarea').fill('New support agent for the team');
+  await dlg.getByRole('button', {name: 'تأكيد'}).click();
+  await dlg.getByText('كلمة المرور غير صحيحة.').waitFor({timeout: 10000});
+  ok(true, 'a wrong password shows an error and keeps the dialog open');
+  await dlg.locator('input[type=password]').fill(PW);
+  await dlg.getByRole('button', {name: 'تأكيد'}).click();
+  await page.getByText('تم إنشاء حساب المشرف.').waitFor({timeout: 10000});
+  ok(true, 'correct password and reason complete the action');
 
   // ---- mobile layout ----
   await page.setViewportSize({width: 390, height: 844});

@@ -76,7 +76,7 @@ export async function buildAdmin({email, name, role, password, createdBy = null}
 
 const needle = req => clean(req.query.q, 100);
 const paging = req => ({page: req.query.page, pageSize: req.query.pageSize});
-const reasonOf = req => { const r = clean(req.body?.reason, 500); if (r.length < 5) throw Object.assign(Error('A reason of at least 5 characters is required for this action.'), {status: 400}); return r; };
+const reasonOf = req => { const r = clean(req.body?.reason, 500); if (r.length < 5) throw Object.assign(Error('A reason of at least 5 characters is required for this action.'), {status: 400, needReason: true}); return r; };
 const httpError = (status, error) => Object.assign(Error(error), {status});
 
 // ---- Step-up and second approver (A-1) ----
@@ -97,7 +97,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
   const db = () => customer.db();
   const audit = (q, input) => repo.audit.append(q, input);
   const actorOf = req => req.admin.legacy ? {type: 'legacy-token'} : {type: 'admin', id: req.admin.id, role: req.admin.role};
-  const fail = (res, e) => res.status(e.status || 500).json({error: e.status ? e.message : 'Unexpected server error.'});
+  const fail = (res, e) => res.status(e.status || 500).json({error: e.status ? e.message : 'Unexpected server error.', ...(e.needReason && {needReason: true})});
 
   function readCookie(req) {
     const raw = (req.headers.cookie || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
