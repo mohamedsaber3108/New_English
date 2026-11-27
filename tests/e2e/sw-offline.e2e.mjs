@@ -74,7 +74,22 @@ try {
     ok(text.includes('لا يوجد اتصال') && text.includes('You are offline'), `offline ${path}: the Arabic and English offline page is shown`);
     ok(!text.includes(NAME) && !text.includes(email), `offline ${path}: no private content is shown`);
   }
+  // the offline page has one retry button per language, each with its own lang
+  ok(await page.locator('section[lang="ar"][dir="rtl"] button#retry-ar[lang="ar"]').count() === 1 && /[\u0600-\u06FF]/.test(await page.locator('#retry-ar').innerText()), 'offline page: Arabic retry button inside the Arabic section, lang="ar", Arabic label');
+  ok(await page.locator('section[lang="en"][dir="ltr"] button#retry-en[lang="en"]').count() === 1 && /^[A-Za-z ]+$/.test((await page.locator('#retry-en').innerText()).trim()), 'offline page: English retry button inside the English section, lang="en", English label');
+  ok(await page.locator('#still-ar').isHidden() && await page.locator('#still-en').isHidden(), 'offline page: the still-offline lines are hidden before retry');
+  // retry while still offline: a "still offline" line appears in BOTH languages inside the role=status region
+  for (const btn of ['#retry-ar', '#retry-en']) {
+    await page.locator(btn).click();
+    await page.locator('#still-ar').waitFor({state: 'visible', timeout: 10000});
+    ok(await page.locator('#retry-status[role="status"][aria-live="polite"] #still-ar[lang="ar"]').isVisible() && await page.locator('#retry-status #still-en[lang="en"]').isVisible(), `offline page: clicking ${btn} while offline shows the still-offline line in Arabic and English in the role=status region`);
+    ok(/ما زلت غير متصل/.test(await page.locator('#still-ar').innerText()) && /still offline/.test(await page.locator('#still-en').innerText()), `offline page: after ${btn} the Arabic line is Arabic and the English line is English`);
+  }
   await ctx.setOffline(false);
+  // back online: retry reloads the page and the offline page is gone
+  await page.locator('#retry-en').click();
+  await page.waitForFunction(() => !document.getElementById('retry-en'), null, {timeout: 15000});
+  ok(true, 'back online: retry reloads the page (the offline page is replaced)');
 } finally {
   if (browser) await browser.close();
   if (server) await stopServer(server);

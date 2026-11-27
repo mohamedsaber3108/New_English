@@ -66,6 +66,17 @@ const off = await readFile(new URL('../client/public/offline.html', import.meta.
 ok(/[\u0600-\u06FF]/.test(off) && /You are offline/.test(off), 'offline page has Arabic and English text');
 ok(/lang="ar"[^>]*dir="rtl"/.test(off) && /lang="en"[^>]*dir="ltr"/.test(off), 'offline page sets language and direction per section');
 ok(!/<script(?![^>]*\bsrc=)/.test(off), 'offline page has no inline script (CSP script-src self)');
+ok((off.match(/<script/g) || []).length === 1 && /<script src="\/offline\.js"><\/script>/.test(off), 'offline.js is the only script on the offline page');
+// two retry buttons, each inside its own language section and carrying its own lang
+const arSection = off.match(/<section lang="ar" dir="rtl">[\s\S]*?<\/section>/)?.[0] || '', enSection = off.match(/<section lang="en" dir="ltr">[\s\S]*?<\/section>/)?.[0] || '';
+ok(/<button[^>]*id="retry-ar"[^>]*lang="ar"[^>]*>[\u0600-\u06FF ]+<\/button>/.test(arSection), 'the Arabic section has its own Arabic retry button with lang="ar"');
+ok(/<button[^>]*id="retry-en"[^>]*lang="en"[^>]*>[A-Za-z ]+<\/button>/.test(enSection), 'the English section has its own English retry button with lang="en"');
+ok(!/id="retry"/.test(off) && (off.match(/<button/g) || []).length === 2, 'the old single bilingual button is gone (exactly two buttons)');
+const status = off.match(/<div id="retry-status"[^>]*>[\s\S]*?<\/div>/)?.[0] || '';
+ok(/role="status"/.test(status) && /aria-live="polite"/.test(status), 'the still-offline lines sit in a role="status" container with aria-live polite');
+ok(/<p id="still-ar" lang="ar" dir="rtl" hidden>[\u0600-\u06FF ،.]+<\/p>/.test(status) && /<p id="still-en" lang="en" dir="ltr" hidden>[A-Za-z ,.]+<\/p>/.test(status), 'the still-offline line exists in Arabic (lang="ar") and English (lang="en"), hidden until needed');
+const offJs = await readFile(new URL('../client/public/offline.js', import.meta.url), 'utf8');
+ok(/getElementById\('retry-ar'\)|'retry-ar'/.test(offJs) && /'retry-en'/.test(offJs) && /location\.reload\(\)/.test(offJs) && /still-ar/.test(offJs) && /still-en/.test(offJs), 'offline.js wires both buttons, reloads when back online, and shows both still-offline lines otherwise');
 ok(/isPrecachedPath\(new URL\(r\.url\)\.pathname\)/.test(sw), 'sw.js keeps the precached files when clearing');
 const bundle = await readdir(new URL('../client/src/', import.meta.url));
 // Every file with a sign-out path must call clearSwCaches() once per path. Sign-out paths: admin logout, admin
