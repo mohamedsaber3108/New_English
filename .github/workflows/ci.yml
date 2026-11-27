@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -93,5 +93,4 @@ jobs:
       - run: test -x "$CHROME_PATH"
       - run: npm run build:app
       - run: npm run test:e2e
-      # TODO(E-1 follow-up): axe-core on the 8 main pages in Arabic and English (0 critical). Needs a new dev dependency and a new
-      # test file, so it is not faked here.
+      # axe-core on the 8 main pages (AR + EN, 0 critical) is tracked as task E-1b.
