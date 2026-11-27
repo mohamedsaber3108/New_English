@@ -21,10 +21,15 @@
     return STATIC_PREFIXES.some(p => u.pathname.startsWith(p)) && STATIC_DESTINATIONS.includes(req.destination);
   }
 
-  // res: {status, type, headers: {get(name)}}. Never store a response that sets a cookie or is marked private.
-  function isCacheableResponse(res) {
+  // res: {status, type, headers: {get(name)}}; destination: the request's destination, when known.
+  // Never store a response that is marked private. Note: browsers hide Set-Cookie from scripts, so the set-cookie check
+  // below can never fire in a real worker; it is only defence in depth. The real guard is the path allow-list in
+  // isCacheableRequest (only /assets/, /brand/ and three named files are ever stored).
+  function isCacheableResponse(res, destination) {
     if (!res || res.status !== 200 || res.type !== 'basic') return false;
     if (res.headers.get('set-cookie')) return false;
+    // A script/style/font/image request answered with an HTML page is the app shell or an error page, not an asset.
+    if (STATIC_DESTINATIONS.includes(destination) && /text\/html/i.test(String(res.headers.get('content-type') || ''))) return false;
     const cc = String(res.headers.get('cache-control') || '').toLowerCase();
     if (/(^|[\s,])(no-store|private)([\s,=]|$)/.test(cc)) return false;
     if (String(res.headers.get('vary') || '').includes('*')) return false;
@@ -34,5 +39,9 @@
   const CACHE_PREFIX = 'usam-language-';
   const cacheName = version => CACHE_PREFIX + version;
 
-  globalThis.SWPolicy = {isCacheableRequest, isCacheableResponse, isPrivatePath, cacheName, CACHE_PREFIX, PRECACHE: ['/offline.html', '/offline.js', '/manifest.webmanifest', '/brand/language-mark.svg']};
+  const PRECACHE = ['/offline.html', '/offline.js', '/manifest.webmanifest', '/brand/language-mark.svg'];
+  // Sign-out clears everything EXCEPT these install-time files, so the offline page keeps working after sign-out.
+  const isPrecachedPath = pathname => PRECACHE.includes(pathname);
+
+  globalThis.SWPolicy = {isCacheableRequest, isCacheableResponse, isPrivatePath, isPrecachedPath, cacheName, CACHE_PREFIX, PRECACHE};
 })();

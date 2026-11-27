@@ -34,7 +34,7 @@ try {
   const bad = await fetch(S.origin + '/api/customer/login', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{"email": broken'});
   ok(bad.status === 400 && (await bad.json()).error === 'Invalid JSON body.', 'malformed JSON -> 400 JSON error');
   ok((await fetch(S.origin + '/')).status === 200, 'the frontend still serves at /');
-  for (const f of ['/sw.js', '/sw-policy.js', '/offline.html']) {
+  for (const f of ['/sw.js', '/sw-policy.js', '/offline.html', '/offline.js']) {
     const r = await fetch(S.origin + f);
     ok(r.status === 200 && r.headers.get('cache-control') === 'no-cache', `${f} is served with Cache-Control: no-cache (service worker updates are not delayed)`);
   }
