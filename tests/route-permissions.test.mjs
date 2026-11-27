@@ -140,7 +140,7 @@ try {
   ok(checks === expectedChecks, `${checks} route x role checks ran (expected ${expectedChecks} = non-public routes x ${Object.keys(ROLES).length} roles; failures are listed above)`);
 } finally {
   if (child) await stopServer(child);
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   if (pgAdmin) { try { await pgAdmin.query(`DROP DATABASE IF EXISTS ${isolatedDb} WITH (FORCE)`); } catch {} await pgAdmin.end(); }
 }
 if (failures) { console.error(`\nRoute-permission tests FAILED (${failures}).`); process.exit(1); }

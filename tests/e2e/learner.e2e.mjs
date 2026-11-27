@@ -146,7 +146,7 @@ try {
 finally {
   try { await browser?.close(); } catch {}
   if (server) await stopServer(server);
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nLearner E2E FAILED (${failures}).`); process.exit(1); }
 console.log('\nLearner E2E passed.');

@@ -80,7 +80,7 @@ try {
       await pdb.close();
     } finally { await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); await admin.end(); }
   } else console.log('DATABASE_URL not set — skipping PostgreSQL import.');
-} finally { await rm(dir, {recursive: true, force: true}); }
+} finally { await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200}); }
 if (failures) { console.error(`\nLegacy import tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nLegacy import tests passed.');
 process.exit(0);

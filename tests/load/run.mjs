@@ -110,7 +110,7 @@ for (const backend of BACKENDS) for (const size of SIZES) {
     results.push({backend, size, scenario: 'seed', error: 'storage rejected the data set: ' + e.message.slice(0, 160)});
     await storage.close().catch(() => {});
     if (dbName) await pgAdmin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
-    await rm(dir, {recursive: true, force: true});
+    await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
     continue;
   }
   await storage.close();
@@ -142,7 +142,7 @@ for (const backend of BACKENDS) for (const size of SIZES) {
   } finally {
     server?.child.kill(); await sleep(500);
     if (dbName) await pgAdmin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
-    await rm(dir, {recursive: true, force: true});
+    await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   }
 }
 if (pgAdmin) await pgAdmin.end();

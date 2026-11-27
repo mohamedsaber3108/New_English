@@ -49,7 +49,7 @@ try {
   const warn = await run({NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com', ADMIN_MFA_KEY: MFA_KEY, ADMIN_REQUIRE_MFA: 'true'});
   ok(warn.code === 'running' && warn.up && /"msg":"configuration".*AUDIT_HMAC_KEY/.test(warn.out), 'a production server with only warnings starts, serves, and logs each warning');
   if (!(warn.code === 'running' && warn.up)) console.error('    detail: code=' + warn.code + ' up=' + warn.up + ' out=' + warn.out.slice(-600));
-} finally { await rm(dir, {recursive: true, force: true}); }
+} finally { await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200}); }
 if (failures) { console.error(`\nConfig tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nConfig tests passed.');
 process.exit(0);

@@ -178,7 +178,7 @@ try {
   try { await browser?.close(); } catch {}
   try { server?.kill(); } catch {}
   await sleep(300);
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nAdmin E2E FAILED (${failures}).`); process.exit(1); }
 console.log('\nAdmin E2E passed.');

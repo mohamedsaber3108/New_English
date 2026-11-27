@@ -21,7 +21,11 @@ async function waitReady(origin){
   throw Error('server did not start');
 }
 
-async function stop({child,dir}){child.kill('SIGTERM');await rm(dir,{recursive:true,force:true})}
+// Wait for the server to exit (it closes PGlite on SIGTERM) before deleting its data dir; retry if files are still going away.
+async function stop({child,dir}){
+  await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode)return resolve();const t=setTimeout(()=>{try{child.kill('SIGKILL')}catch{}},8000);child.once('exit',()=>{clearTimeout(t);resolve()});child.kill('SIGTERM')});
+  await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+}
 
 // A paid learning endpoint. /api/feedback is gated by paid(). Without an entitlement it must be blocked when enforced.
 async function callFeedback(origin,cookie){

@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {randomBytes} from 'node:crypto';
 import {freePort} from './helpers.mjs';
 
 let failures = 0;
@@ -52,17 +53,29 @@ try {
   const dc = [];
   for (let i = 0; i < 12; i++) dc.push((await post(down.origin, '/api/customer/login', {email: `nobody${i}@example.com`, password: 'wrong-password-xx'})).status);
   ok(dc.slice(0, 10).every(c => c === 401) && dc.slice(10).every(c => c === 429), 'Redis down: 11th and 12th login in 15 minutes still get 429 (in-process limit, not fail-open)');
-  const fc = [];
-  for (let i = 0; i < 12; i++) fc.push((await post(down.origin, '/api/customer/password/forgot', {email: `forgot${i}@example.com`})).status);
-  ok(fc.slice(10).every(c => c === 429), 'Redis down: password-reset requests are limited too (429 from the 11th, same IP window as login)');
   const ready = await (await fetch(down.origin + '/api/ready')).json();
   ok(ready.rateLimit?.degraded === true, 'Redis down: /api/ready reports the limiter as degraded');
-  // Payment webhook: covered by the API-wide limit (default 120/min/IP). A Paymob retry burst of a few calls passes; a flood does not.
-  const w = [];
-  for (let i = 0; i < 130; i++) w.push((await post(down.origin, '/api/paymob/webhook', {type: 'TRANSACTION', obj: {}})).status);
-  ok(w.slice(0, 5).every(c => c !== 429), 'Redis down: the first webhook retries are not rate limited');
-  ok(w.slice(125).every(c => c === 429), 'Redis down: a webhook flood beyond the API limit gets 429');
   down.child.kill();
+
+  // Password reset, on a FRESH server so the reset route's own limit is what is measured (10 per IP per 15 minutes).
+  const downReset = await start(dir, await freePort(), {REDIS_URL: 'redis://127.0.0.1:1', RATELIMIT_CONNECT_WAIT_MS: '200'});
+  procs.push(downReset.child);
+  const fc = [];
+  for (let i = 0; i < 12; i++) fc.push((await post(downReset.origin, '/api/customer/password/forgot', {email: `forgot${i}@example.com`})).status);
+  ok(fc.slice(0, 10).every(c => c !== 429) && fc.slice(10).every(c => c === 429), `Redis down: password reset allows 10 requests, then 429 (got ${fc.join(',')})`);
+  downReset.child.kill();
+
+  // Payment webhook: the route is /api/paymob/webhook (server/customer.js, mounted under /api). It has no limit of its own;
+  // it is covered by the API-wide limit (default 120 requests / minute / IP). Paymob sends all callbacks from a few IPs,
+  // so that limit is shared by every callback: a retry burst of a few calls passes, a flood does not.
+  // With an HMAC secret configured, an unsigned call gets the webhook's own answer, 403 (404 would mean a wrong path).
+  const downHook = await start(dir, await freePort(), {REDIS_URL: 'redis://127.0.0.1:1', RATELIMIT_CONNECT_WAIT_MS: '200', PAYMOB_HMAC_SECRET: randomBytes(32).toString('hex')});
+  procs.push(downHook.child);
+  const w = [];
+  for (let i = 0; i < 130; i++) w.push((await post(downHook.origin, '/api/paymob/webhook', {type: 'TRANSACTION', obj: {}})).status);
+  ok(w.slice(0, 5).every(c => c === 403), `Redis down: the first webhook calls reach the webhook handler (bad HMAC -> 403, not 404 or 429; got ${w.slice(0, 5).join(',')})`);
+  ok(w.every(c => c === 403 || c === 429) && w.slice(125).every(c => c === 429), 'Redis down: a webhook flood beyond the API-wide limit gets 429');
+  downHook.child.kill();
 
   // --- Two instances sharing Redis: limit must be global, not per-instance ---
   if (process.env.REDIS_URL) {
@@ -78,8 +91,9 @@ try {
     ok(st.slice(20).every(c => c === 429), 'attempt 21+ throttled even though split across instances (shared Redis limit)');
   } else console.log('REDIS_URL not set — skipping multi-instance shared-limit test.');
 } finally {
-  for (const p of procs) try { p.kill(); } catch {}
-  await rm(dir, {recursive: true, force: true});
+  // let every server exit (it closes its database) before its data directory is removed
+  await Promise.all(procs.map(p => new Promise(resolve => { if (p.exitCode !== null || p.signalCode) return resolve(); const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 5000); p.once('exit', () => { clearTimeout(t); resolve(); }); try { p.kill(); } catch { resolve(); } })));
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nAbuse-limit tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nAbuse-limit tests passed.');

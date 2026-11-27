@@ -88,7 +88,7 @@ try {
 finally {
   await stopServer(child);
   provider.close();
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nAI tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nAI tests passed.');

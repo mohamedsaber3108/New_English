@@ -239,7 +239,7 @@ try {
   for (const p of procs) try { p.kill(); } catch {}
   await sleep(300);
   if (pgAdmin) { try { await pgAdmin.query(`DROP DATABASE IF EXISTS ${isolatedDb} WITH (FORCE)`); } catch (e) { console.error('could not drop', isolatedDb, e.message); } await pgAdmin.end(); }
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nAdmin tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nAdmin tests passed.');

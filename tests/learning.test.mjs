@@ -135,7 +135,7 @@ async function apiSuite(label, extraEnv, openDb) {
   } finally {
     for (const p of procs) try { p.kill(); } catch {}
     await sleep(300);
-    await rm(dir, {recursive: true, force: true});
+    await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   }
 }
 
