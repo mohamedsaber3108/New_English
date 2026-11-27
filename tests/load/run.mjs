@@ -83,7 +83,7 @@ async function startServer(env) {
 const profileBody = n => ({profile: {name: 'Load', goal: 'Travel & everyday life', minutes: 20, assessmentDone: true, level: 'A2', xp: n, streak: 1, skills: {Speaking: 47}}});
 
 const results = [];
-const env0 = {...process.env, NODE_ENV: 'production', API_RATE_LIMIT_PER_MIN: '100000000', AUTH_IP_LIMIT: '100000000', REDIS_URL: process.env.REDIS_URL || '', RATE_LIMIT_PREFIX: 'load' + Date.now(), SITE_ORIGIN: ''};
+const env0 = {...process.env, NODE_ENV: 'production', API_RATE_LIMIT_PER_MIN: '100000000', AUTH_IP_LIMIT: '100000000', REDIS_URL: process.env.REDIS_URL || '', RATE_LIMIT_PREFIX: 'load' + Date.now(), SITE_ORIGIN: '', ADMIN_REQUIRE_MFA: 'true', ADMIN_MFA_KEY: (await import('node:crypto')).randomBytes(32).toString('hex')};
 let pgAdmin = null;
 if (BACKENDS.includes('pg')) {
   if (!process.env.DATABASE_URL) { console.error('pg backend requested but DATABASE_URL is not set'); process.exit(2); }

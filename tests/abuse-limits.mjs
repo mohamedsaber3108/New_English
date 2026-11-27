@@ -46,6 +46,24 @@ try {
   ok((await post(b.origin, '/api/leads', lead(99))).status === 201, 'invalid lead submissions do not consume the lead quota');
   b.child.kill();
 
+  // --- Redis DOWN (nothing listens on port 1): login, password reset and the payment webhook stay limited (E-10) ---
+  const down = await start(dir, await freePort(), {REDIS_URL: 'redis://127.0.0.1:1', RATELIMIT_CONNECT_WAIT_MS: '200'});
+  procs.push(down.child);
+  const dc = [];
+  for (let i = 0; i < 12; i++) dc.push((await post(down.origin, '/api/customer/login', {email: `nobody${i}@example.com`, password: 'wrong-password-xx'})).status);
+  ok(dc.slice(0, 10).every(c => c === 401) && dc.slice(10).every(c => c === 429), 'Redis down: 11th and 12th login in 15 minutes still get 429 (in-process limit, not fail-open)');
+  const fc = [];
+  for (let i = 0; i < 12; i++) fc.push((await post(down.origin, '/api/customer/password/forgot', {email: `forgot${i}@example.com`})).status);
+  ok(fc.slice(10).every(c => c === 429), 'Redis down: password-reset requests are limited too (429 from the 11th, same IP window as login)');
+  const ready = await (await fetch(down.origin + '/api/ready')).json();
+  ok(ready.rateLimit?.degraded === true, 'Redis down: /api/ready reports the limiter as degraded');
+  // Payment webhook: covered by the API-wide limit (default 120/min/IP). A Paymob retry burst of a few calls passes; a flood does not.
+  const w = [];
+  for (let i = 0; i < 130; i++) w.push((await post(down.origin, '/api/paymob/webhook', {type: 'TRANSACTION', obj: {}})).status);
+  ok(w.slice(0, 5).every(c => c !== 429), 'Redis down: the first webhook retries are not rate limited');
+  ok(w.slice(125).every(c => c === 429), 'Redis down: a webhook flood beyond the API limit gets 429');
+  down.child.kill();
+
   // --- Two instances sharing Redis: limit must be global, not per-instance ---
   if (process.env.REDIS_URL) {
     const tag = Date.now();

@@ -35,11 +35,15 @@ await suite('memory', () => createRateLimiter({redisUrl: ''}));
 if (process.env.REDIS_URL) await suite('redis', () => createRateLimiter({redisUrl: process.env.REDIS_URL}));
 else console.log('REDIS_URL not set — skipping Redis suite.');
 
-// Fail-open when Redis is unreachable
+// Redis unreachable: the limiter keeps serving AND keeps enforcing the limit with its in-process window (E-10).
 {
   const bad = createRateLimiter({redisUrl: 'redis://127.0.0.1:1'});
-  const r = await bad.consume(uniq(), 1, 1000);
-  ok(r.allowed === true, 'unreachable Redis fails open to in-memory (request still served)');
+  const k = uniq();
+  const first = await bad.consume(k, 3, 5000);
+  ok(first.allowed === true, 'unreachable Redis: the first request is still served');
+  const rest = [];
+  for (let i = 0; i < 4; i++) rest.push((await bad.consume(k, 3, 5000)).allowed);
+  ok(JSON.stringify(rest) === JSON.stringify([true, true, false, false]), 'unreachable Redis: the limit still holds (3 allowed, then blocked), it does not fail open');
   ok(bad.status().degraded === true, 'status() reports degraded');
   await bad.close();
 }
