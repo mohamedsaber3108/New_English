@@ -1,22 +1,25 @@
 // Route-permission table test (E-3).
 // 1. Every route registered by adminRouter() is discovered from the Express router itself (not from a hand list).
 // 2. Each discovered route MUST have an entry in TABLE below; a route with no entry, or an entry with no route, fails the test.
-// 3. Against a real server: no cookie -> 401; every role lacking the permission -> 403 with a plain message;
-//    every role that has it -> not 401/403/5xx (success or validation/not-found, using dummy ids so nothing real changes).
-// TABLE value: a permission name, 'session' (any signed-in admin, no permission), or 'public' (sign-in / sign-out routes).
+// 3. Against a real server: no cookie -> 401; every role lacking the permission -> 403 with exactly DENIED_MESSAGE (exported by
+//    server/admin.js); every role that has it -> not stopped by the gate (success or validation/not-found, dummy ids only).
+// TABLE value: a permission name, 'session' (any signed-in admin, no permission), or 'public'.
+// 'public' = login, mfa and logout: they run before a session exists (login/mfa) or must work without one (logout), so they are
+// only checked for not crashing (login with an empty body must answer 400 or 401).
+// Scope: only routes registered inside adminRouter() are discovered. Admin-like routes added in server/index.js or another
+// router are NOT covered by this test.
 import {spawn} from 'node:child_process';
-import {mkdtemp} from 'node:fs/promises';
+import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {freePort, stopServer} from './helpers.mjs';
-import {adminRouter, ROLES, PERMISSIONS, can} from '../server/admin.js';
+import {adminRouter, ROLES, PERMISSIONS, DENIED_MESSAGE as DENIED, can} from '../server/admin.js';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const DENIED = 'Your role does not allow this action.';
 const TABLE = {
   'POST /admin/auth/login': 'public',
   'POST /admin/auth/mfa': 'public',
@@ -114,6 +117,7 @@ try {
     if (rule === 'public') {
       const r = await call(o, method, path, null, bodyFor(method));
       ok(r.status !== 500, `${route}: public route answers without a server crash (got ${r.status})`);
+      if (route === 'POST /admin/auth/login') ok(r.status === 400 || r.status === 401, `${route}: empty body -> 400 or 401 (got ${r.status})`);
       continue;
     }
     const anon = await call(o, method, path, null, bodyFor(method));
@@ -128,13 +132,15 @@ try {
         if (r.status === 401 || r.status === 500 || r.data?.error === DENIED) ok(false, `${route}: ${role} has '${rule}' and must pass the permission check (got ${r.status})`);
       } else {
         const msg = r.data?.error;
-        if (!(r.status === 403 && typeof msg === 'string' && msg.length >= 10 && msg.length <= 160 && !/\n|Error:|\bat .*:\d+/.test(msg))) ok(false, `${route}: ${role} lacks '${rule}' and must get 403 with a plain message (got ${r.status}, ${JSON.stringify(msg)})`);
+        if (!(r.status === 403 && msg === DENIED)) ok(false, `${route}: ${role} lacks '${rule}' and must get 403 with a plain message (got ${r.status}, ${JSON.stringify(msg)})`);
       }
     }
   }
-  ok(true, `${checks} route x role checks done (failures are listed above)`);
+  const expectedChecks = Object.values(TABLE).filter(v => v !== 'public').length * Object.keys(ROLES).length;
+  ok(checks === expectedChecks, `${checks} route x role checks ran (expected ${expectedChecks} = non-public routes x ${Object.keys(ROLES).length} roles; failures are listed above)`);
 } finally {
   if (child) await stopServer(child);
+  await rm(dir, {recursive: true, force: true});
   if (pgAdmin) { try { await pgAdmin.query(`DROP DATABASE IF EXISTS ${isolatedDb} WITH (FORCE)`); } catch {} await pgAdmin.end(); }
 }
 if (failures) { console.error(`\nRoute-permission tests FAILED (${failures}).`); process.exit(1); }

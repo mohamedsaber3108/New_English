@@ -40,6 +40,7 @@ export const ROLES = {
   support: {label: 'Support', description: 'Support tickets and leads; read-only accounts and orders', permissions: ['dashboard.read', 'users.read', 'orders.read', 'support.read', 'support.write', 'leads.read', 'leads.write']},
   viewer: {label: 'Viewer', description: 'Read-only access to operations data', permissions: ['dashboard.read', 'users.read', 'orders.read', 'support.read', 'leads.read']},
 };
+export const DENIED_MESSAGE = 'Your role does not allow this action.';
 export const can = (role, perm) => !!ROLES[role]?.permissions.includes(perm);
 
 const COOKIE = 'usam_admin';
@@ -133,7 +134,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
       if (mfaRequired() && !found.admin.mfa?.enabled && !allowUnenrolled) return res.status(403).json({error: 'Two-factor authentication must be enabled before using the console.', mfaEnrollmentRequired: true});
       if (perm && !can(found.admin.role, perm)) {
         await d.tx(q => audit(q, {event: 'admin_permission_denied', actor: {type: 'admin', id: found.admin.id, role: found.admin.role}, meta: {permission: perm, method: req.method, path: req.path}}));
-        return res.status(403).json({error: 'Your role does not allow this action.'});
+        return res.status(403).json({error: DENIED_MESSAGE});
       }
       req.admin = found.admin; req.adminSession = found.session;
       if (Date.now() - found.session.lastSeen > 60000) await repo.adminSessions.touch(d, found.session.id, Date.now());
