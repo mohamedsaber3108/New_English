@@ -85,7 +85,7 @@ export const sessions = {
 
 // ---------------------------------------------------------------- orders
 const ORDER_MAP = {userId: 'user_id', language: 'language', plan: 'plan', term: 'term', amount: 'amount', status: 'status', createdAt: 'created_at', paidAt: 'paid_at', expiresAt: 'expires_at',
-  paymobOrderId: 'paymob_order_id', intentionId: 'intention_id', transactionId: 'transaction_id', manualPaymentReference: 'manual_payment_reference', activatedBy: 'activated_by', refundedAt: 'refunded_at', refundedBy: 'refunded_by'};
+  paymobOrderId: 'paymob_order_id', intentionId: 'intention_id', transactionId: 'transaction_id', manualPaymentReference: 'manual_payment_reference', activatedBy: 'activated_by', refundedAt: 'refunded_at', refundedBy: 'refunded_by', currency: 'currency'};
 function toOrder(r) {
   if (!r) return null;
   const o = {reference: r.reference};
@@ -122,6 +122,26 @@ export const orders = {
 // ---------------------------------------------------------------- support tickets
 const toTicket = r => r && clean({reference: r.reference, userId: r.user_id, category: r.category, subject: r.subject, message: r.message, status: r.status, resolution: r.resolution, createdAt: iso(r.created_at), updatedAt: iso(r.updated_at), updatedBy: r.updated_by,
   ...(r.c_email !== undefined ? {customer: r.c_id ? {id: r.c_id, name: r.c_name, email: r.c_email} : null} : {})});
+// ---------------------------------------------------------------- payment events (E-6)
+export const paymentEvents = {
+  // Claims a provider event for processing, inside the caller's transaction. {replay: true} only when this event was
+  // already APPLIED: any other earlier outcome (rejected, unmatched, ignored) is processed again. An existing row is
+  // locked, so two concurrent deliveries of one event are processed one after the other. Call setOutcome afterwards.
+  async claim(q, {provider, eventId, orderRef = null, rawBody, signatureVerified = true}) {
+    const ins = await q.query("INSERT INTO payment_events (provider, event_id, order_ref, raw_body, signature_verified, outcome) VALUES ($1,$2,$3,$4,$5,'ignored') ON CONFLICT (provider, event_id) DO NOTHING RETURNING id", [provider, eventId, orderRef, rawBody, !!signatureVerified]);
+    if (ins.rows.length) return {id: ins.rows[0].id, replay: false, previousOrderRef: null};
+    const ex = (await q.query('SELECT id, outcome, order_ref FROM payment_events WHERE provider = $1 AND event_id = $2 FOR UPDATE', [provider, eventId])).rows[0];
+    return {id: ex.id, replay: ex.outcome === 'applied', previousOrderRef: ex.order_ref};
+  },
+  async setOutcome(q, id, outcome, orderRef = null) { await q.query('UPDATE payment_events SET outcome = $2, order_ref = COALESCE($3, order_ref) WHERE id = $1', [id, outcome, orderRef]); },
+  // Anomaly record written OUTSIDE a transaction that failed (the failed one rolled back its own claim).
+  async markRejected(q, {provider, eventId, orderRef = null, rawBody}) {
+    await q.query("INSERT INTO payment_events (provider, event_id, order_ref, raw_body, signature_verified, outcome) VALUES ($1,$2,$3,$4,true,'rejected') ON CONFLICT (provider, event_id) DO UPDATE SET outcome = 'rejected'", [provider, eventId, orderRef, rawBody]);
+  },
+  // Account deletion: remove the provider payloads (billing data) of every order of this learner.
+  async removeForUser(q, userId) { await q.query('DELETE FROM payment_events WHERE order_ref IN (SELECT reference FROM orders WHERE user_id = $1)', [userId]); },
+};
+
 export const tickets = {
   async create(q, t) { await q.query('INSERT INTO support_tickets (reference, user_id, category, subject, message, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [t.reference, t.userId, t.category, t.subject, t.message, t.status, t.createdAt, t.updatedAt]); },
   async listForUser(q, userId) { return (await q.query('SELECT * FROM support_tickets WHERE user_id = $1 ORDER BY created_at DESC', [userId])).rows.map(toTicket); },

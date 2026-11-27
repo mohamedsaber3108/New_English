@@ -23,7 +23,7 @@
     "test:rooms": "node tests/rooms.test.mjs",
     "test:ratelimit": "node tests/ratelimit.test.mjs && node tests/abuse-limits.mjs",
     "pretest": "node scripts/ensure-dist.mjs",
-    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/audit.test.mjs && node tests/db.test.mjs && node tests/repo.test.mjs && node tests/legacy-import.test.mjs && node tests/learning.test.mjs && node tests/totp.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/observability.test.mjs && node tests/config.test.mjs && node tests/ai.test.mjs && node tests/page-meta.test.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/admin.test.mjs && node tests/route-permissions.test.mjs && node tests/sw-policy.test.mjs && node tests/admin-mfa.test.mjs && node tests/multi-instance.mjs && node tests/backup-restore.test.mjs"
+    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/audit.test.mjs && node tests/db.test.mjs && node tests/repo.test.mjs && node tests/legacy-import.test.mjs && node tests/learning.test.mjs && node tests/totp.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/observability.test.mjs && node tests/config.test.mjs && node tests/ai.test.mjs && node tests/page-meta.test.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/money-data.test.mjs && node tests/admin.test.mjs && node tests/route-permissions.test.mjs && node tests/sw-policy.test.mjs && node tests/admin-mfa.test.mjs && node tests/multi-instance.mjs && node tests/backup-restore.test.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.15",
