@@ -1,6 +1,6 @@
 // Admin RBAC + operations integration tests (real server processes, real HTTP, real storage).
 import {spawn} from 'node:child_process';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {freePort, stopServer} from './helpers.mjs';
@@ -13,7 +13,7 @@ const RUN = 'adm' + Date.now() + Math.random().toString(36).slice(2, 6);
 const PW = 'correct-horse-battery-staple';
 const procs = [];
 const dir = await mkdtemp(join(tmpdir(), 'usam-admin-'));
-const baseEnv = extra => ({...process.env, NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '1000', AUDIT_HMAC_KEY: 'test-audit-key-0123456789', LEADS_FILE: join(dir, 'none.jsonl'), ...extra});
+const baseEnv = extra => ({...process.env, NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '1000', AUDIT_HMAC_KEY: 'test-audit-key-0123456789', LEADS_FILE: join(dir, 'none.jsonl'), BACKUP_STATUS_FILE: join(dir, 'backup-status.json'), ...extra});
 
 function runCli(script, args, env, input) {
   return new Promise(resolve => {
@@ -189,6 +189,12 @@ try {
   ok((await adminLogin(O, `support-${RUN}@example.com`)).r.status === 401, 'a disabled administrator cannot sign in');
   const roles = await call(O, '/api/admin/roles', {cookie: s.admin});
   ok(roles.status === 200 && roles.data.roles.owner && roles.data.permissions['orders.write'], 'role matrix is available to admins.read');
+  // --- backup status (A-7) ---
+  ok((await call(O, '/api/admin/backup-status', {cookie: s.viewer})).data.configured === false, 'backup status: no status file -> configured:false (viewer has dashboard.read)');
+  await writeFile(join(dir, 'backup-status.json'), JSON.stringify({lastBackup: {at: new Date().toISOString(), file: 'usam-t.dump', sizeBytes: 2048, sha256: 'b'.repeat(64), result: 'ok'}}));
+  const bs = await call(O, '/api/admin/backup-status', {cookie: s.viewer});
+  ok(bs.status === 200 && bs.data.configured === true && bs.data.lastBackup.sizeBytes === 2048, 'backup status: file present -> details returned');
+  ok((await call(O, '/api/admin/backup-status')).status === 401, 'backup status: needs a signed-in administrator');
 
   // --- audit trail ---
   const audit = await call(O, '/api/admin/audit?pageSize=100', {cookie: owner.cookie});

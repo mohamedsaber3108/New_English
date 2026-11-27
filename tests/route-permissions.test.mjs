@@ -30,6 +30,7 @@ const TABLE = {
   'GET /admin/auth/me': 'session',
   'POST /admin/auth/password': 'session',
   'GET /admin/overview': 'dashboard.read',
+  'GET /admin/backup-status': 'dashboard.read',
   'GET /admin/users': 'users.read',
   'GET /admin/users/:id': 'users.read',
   'PATCH /admin/users/:id/status': 'users.write',
