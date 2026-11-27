@@ -1,6 +1,7 @@
 import React,{useState} from 'react';
 import {ArrowRight,ArrowUpRight,AudioLines,BookOpen,Check,ChevronDown,Globe2,Menu,MessageCircle,Mic,Moon,Play,Route,ShieldCheck,Sparkles,Sun,Users,X} from 'lucide-react';
 import './landing.css';
+import {motionBehavior} from './motion.js';
 
 const highlights=[
   {icon:MessageCircle,title:'اتعلم بالمحادثة',body:'ادخل مواقف من السفر والشغل والحياة اليومية، ورد بطريقتك وشوف الخطوة اللي بعدها.'},
@@ -17,7 +18,7 @@ const faqs=[
 export default function Landing({start,enter,hasProfile,theme,setTheme}){
   const[menu,setMenu]=useState(false),[signIn,setSignIn]=useState(false),[openFaq,setOpenFaq]=useState(0);
   const goStart=()=>{setMenu(false);start()};
-  const scrollTo=(e,id)=>{e.preventDefault();setMenu(false);if(id==='top')window.scrollTo({top:0,behavior:'smooth'});else document.getElementById(id)?.scrollIntoView({behavior:'smooth'})};
+  const scrollTo=(e,id)=>{e.preventDefault();setMenu(false);if(id==='top')window.scrollTo({top:0,behavior:motionBehavior()});else document.getElementById(id)?.scrollIntoView({behavior:motionBehavior()})};
   const goSign=()=>{setMenu(false);setSignIn(true)};
   return <div className="landing" dir="rtl">
     <header className="land-nav"><div className="land-nav-inner">

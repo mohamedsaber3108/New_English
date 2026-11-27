@@ -9,7 +9,7 @@
     "dev:api": "node --watch server/index.js",
     "build": "vite build --mode static",
     "build:app": "vite build",
-    "test:e2e": "node tests/e2e/admin.e2e.mjs && node tests/e2e/learner.e2e.mjs && node tests/e2e/a11y.e2e.mjs",
+    "test:e2e": "node tests/e2e/admin.e2e.mjs && node tests/e2e/learner.e2e.mjs && node tests/e2e/lang-motion.e2e.mjs && node tests/e2e/sw-offline.e2e.mjs && node tests/e2e/a11y.e2e.mjs",
     "start": "NODE_ENV=production node server/index.js",
     "check": "node scripts/check-deps.mjs && node --check server/index.js && node --check server/engine.js && node --check server/customer.js && node --check server/operations.js && node --check server/scheduler.js && node --check server/ratelimit.js && node --check server/rooms.js && node --check server/admin.js && node --check server/audit.js && node --check server/passwords.js && node --check server/totp.js && node --check server/observability.js && node --check server/learning.js && node --check server/config.js && node --check server/ai.js && node --check server/db/index.js && node --check server/db/repo.js && node --check server/db/legacy-import.js && node --check scripts/create-admin.mjs && node --check scripts/activate-manual.mjs",
     "admin:create": "node scripts/create-admin.mjs",
@@ -23,7 +23,7 @@
     "test:rooms": "node tests/rooms.test.mjs",
     "test:ratelimit": "node tests/ratelimit.test.mjs && node tests/abuse-limits.mjs",
     "pretest": "node scripts/ensure-dist.mjs",
-    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/audit.test.mjs && node tests/db.test.mjs && node tests/repo.test.mjs && node tests/legacy-import.test.mjs && node tests/learning.test.mjs && node tests/totp.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/observability.test.mjs && node tests/config.test.mjs && node tests/ai.test.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/admin.test.mjs && node tests/route-permissions.test.mjs && node tests/admin-mfa.test.mjs && node tests/multi-instance.mjs && node tests/backup-restore.test.mjs"
+    "test": "node tests/scheduler.test.mjs && node tests/engine.test.mjs && node tests/audit.test.mjs && node tests/db.test.mjs && node tests/repo.test.mjs && node tests/legacy-import.test.mjs && node tests/learning.test.mjs && node tests/totp.test.mjs && node tests/ratelimit.test.mjs && node tests/api-smoke.mjs && node tests/access-enforcement.mjs && node tests/observability.test.mjs && node tests/config.test.mjs && node tests/ai.test.mjs && node tests/page-meta.test.mjs && node tests/abuse-limits.mjs && node tests/rooms.test.mjs && node tests/admin.test.mjs && node tests/route-permissions.test.mjs && node tests/sw-policy.test.mjs && node tests/admin-mfa.test.mjs && node tests/multi-instance.mjs && node tests/backup-restore.test.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.15",
