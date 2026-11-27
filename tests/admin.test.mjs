@@ -210,6 +210,14 @@ try {
   ok((await call(O, `/api/admin/admins/${meOwner}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'viewer', reason: 'self change attempt'}})).status === 409, 'an administrator cannot change their own role');
   const supportId = created.support.data.admin.id;
   ok((await call(O, `/api/admin/admins/${supportId}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled'}})).status === 400, 'disabling an administrator without a reason -> 400');
+  // Single-administrator exception: with one owner (nobody else holds admins.write) a disable needs step-up + reason only.
+  const tempEmail = `temp-${RUN}@example.com`;
+  const temp = await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: tempEmail, name: 'Temp Person', role: 'viewer', password: PW, reason: 'temporary account'}});
+  const soloDis = await call(O, `/api/admin/admins/${temp.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled', reason: 'temporary account removed'}});
+  ok(soloDis.status === 200 && soloDis.data.singleAdmin === true && soloDis.data.admin.status === 'disabled', 'a single owner can disable an account without a second approver (step-up + reason still required)');
+  const soloRole = await call(O, `/api/admin/admins/${created.viewer.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'support', reason: 'role review'}});
+  ok(soloRole.status === 202, 'a role change still needs a second approver even with a single owner');
+  await call(O, `/api/admin/approvals/${soloRole.data.approval.id}/reject`, {method: 'POST', cookie: owner.cookie, body: {reason: 'withdrawn'}});
   // A second owner is needed: role/status changes are approved by a different administrator with admins.write.
   const owner2Email = `owner2-${RUN}@example.com`;
   const o2 = await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: owner2Email, name: 'Second Owner', role: 'owner', password: PW, reason: 'second approver'}});
@@ -220,6 +228,8 @@ try {
   ok(disReq.status === 202 && disReq.data.pending, 'disabling an administrator is stored as a pending request');
   ok((await call(O, '/api/admin/support', {cookie: s.support})).status === 200, 'the administrator still works while the request is pending');
   ok((await call(O, `/api/admin/approvals/${disReq.data.approval.id}/approve`, {method: 'POST', cookie: owner.cookie, body: {reason: 'self approval'}})).status === 403, 'the requester cannot approve an administrator change (403)');
+  const noPerm = await call(O, `/api/admin/approvals/${disReq.data.approval.id}/approve`, {method: 'POST', cookie: s.finance, body: {reason: 'finance tries to approve'}});
+  ok(noPerm.status === 403 && noPerm.data.error === 'Your role does not allow this action.', 'an approver without admins.write gets 403 with the plain denied message (fresh step-up)');
   const rejId = (await call(O, `/api/admin/admins/${created.viewer.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'support', reason: 'role review'}})).data.approval?.id;
   ok((await call(O, `/api/admin/approvals/${rejId}/reject`, {method: 'POST', cookie: owner2.cookie, body: {reason: 'not needed'}})).status === 200, 'a different administrator rejects a request');
   ok((await call(O, `/api/admin/approvals/${rejId}/approve`, {method: 'POST', cookie: owner2.cookie, body: {reason: 'too late'}})).status === 409, 'a rejected request cannot be approved');

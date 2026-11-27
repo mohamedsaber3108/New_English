@@ -360,7 +360,7 @@ function AdminsScreen({me, perms, onAuthLost}) {
   const [form, setForm] = useState({email: '', name: '', role: 'support', password: ''});
   useEffect(() => { adminApi('roles').then(setRoles).catch(e => { if (e.status === 401) onAuthLost(); }); }, []);
   const canWrite = perms.includes('admins.write');
-  const update = (a, body, text) => act.run(() => adminApi('admins/' + a.id, {method: 'PATCH', body}), text).then(r => { if (r) list.reload(); });
+  const update = (a, body, text) => act.run(() => adminApi('admins/' + a.id, {method: 'PATCH', body}), r => r.pending ? text : 'تم تنفيذ التعطيل دون موافقة ثانية، لأنه لا يوجد مشرف آخر بصلاحية إدارة المشرفين.').then(r => { if (r) list.reload(); });
   return <div className="ad-stack">
     <Toolbar q={list.q} setQ={list.setQ} onRefresh={list.reload}/>
     <Notice kind={act.msg.kind}>{act.msg.text}</Notice>

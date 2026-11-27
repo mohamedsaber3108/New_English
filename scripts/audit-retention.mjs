@@ -11,6 +11,7 @@ import {fileURLToPath} from 'node:url';
 import {createDb, pgliteDirFromEnv} from '../server/db/index.js';
 import * as repo from '../server/db/repo.js';
 
+process.env.DB_SKIP_MIGRATIONS = '1'; // the retention role cannot run DDL; migrations run with `npm run db:migrate`
 const days = Number(process.env.AUDIT_RETENTION_DAYS || 365);
 const max = Number(process.env.AUDIT_MAX_ENTRIES || 0);
 if (!(days >= 30)) { console.error('AUDIT_RETENTION_DAYS must be at least 30.'); process.exit(2); }

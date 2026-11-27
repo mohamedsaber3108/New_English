@@ -59,7 +59,9 @@ async function createPg(url) {
   let applied;
   try {
     await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK]);
-    applied = await migrate(tx);
+    // DB_SKIP_MIGRATIONS=1: do not touch the schema. For restricted database roles (insert-only audit app role,
+    // retention role) that cannot run DDL; migrations then run once as the owner role with `npm run db:migrate`.
+    applied = process.env.DB_SKIP_MIGRATIONS === '1' ? [] : await migrate(tx);
   } finally {
     await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]).catch(() => {});
     lockClient.release();

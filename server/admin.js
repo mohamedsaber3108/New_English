@@ -318,8 +318,8 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
           await audit(q, {event: 'admin_step_up', actor: actorOf(req)});
           return {status: 200};
         }
-        const attempts = (req.adminSession.attempts || 0) + 1, exhausted = attempts >= STEP_UP_ATTEMPTS;
-        if (exhausted) await repo.adminSessions.remove(q, req.adminSession.id); else await repo.adminSessions.setAttempts(q, req.adminSession.id, attempts);
+        const attempts = await repo.adminSessions.bumpAttempts(q, req.adminSession.id), exhausted = attempts >= STEP_UP_ATTEMPTS;
+        if (exhausted) await repo.adminSessions.remove(q, req.adminSession.id);
         await audit(q, {event: 'admin_step_up_failed', actor: actorOf(req), meta: {attempt: attempts, exhausted}});
         return {status: exhausted ? 401 : 403, error: exhausted ? 'Too many incorrect passwords. Sign in again.' : 'Password is incorrect.'};
       });
@@ -378,7 +378,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     await repo.users.update(q, u.id, {status});
     if (status === 'suspended') await repo.sessions.removeForUser(q, u.id);
     await audit(q, {event: 'user_status_changed', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {from: u.status || 'active', to: status, reason}});
-  }));
+  }, {sensitive: true}));
   router.post('/admin/users/:id/revoke-sessions', ...userAction('users.write', async (q, u, req) => {
     const reason = reasonOf(req), count = await repo.sessions.removeForUser(q, u.id);
     await audit(q, {event: 'user_sessions_revoked', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {count, reason}});
@@ -411,7 +411,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     } catch (e) { fail(res, e); }
   });
   // Manual activation after staff independently reconciled the payment (replaces scripts/activate-manual.mjs).
-  router.post('/admin/orders/:reference/activate', requireAdmin('orders.write'), async (req, res) => {
+  router.post('/admin/orders/:reference/activate', requireAdmin('orders.write'), stepUp, async (req, res) => {
     try {
       const reason = reasonOf(req), paymentReference = clean(req.body?.paymentReference, 80);
       if (paymentReference.length < 6) return res.status(400).json({error: 'Enter the verified payment reference (at least 6 characters).'});
@@ -466,6 +466,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     const ap = {id: randomUUID(), kind, target, payload, reason, requestedBy: req.admin.id, requestedAt: Date.now()};
     try {
       await (await db()).tx(async q => {
+        await repo.approvals.expireStale(q, kind, target, Date.now() - APPROVAL_TTL_MS); // an expired request must not block a new one
         const info = await check(q);
         await repo.approvals.create(q, ap);
         await audit(q, {event: 'approval_requested', actor: actorOf(req), target: {type: kind === 'refund' ? 'order' : 'admin', id: target}, meta: {kind, approvalId: ap.id, reason, ...info, ...payload}});
@@ -644,6 +645,16 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
       if (status !== undefined && !['active', 'disabled'].includes(status)) return res.status(400).json({error: 'Status must be active or disabled.'});
       if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can grant the owner role.'});
       if (role === undefined && status === undefined) return res.status(400).json({error: 'Choose a role or a status to change.'});
+      // Single-administrator exception: disabling an account needs no second approver when nobody else could approve
+      // (no other active administrator holds admins.write). Step-up and the reason still apply, and the audit entry says so.
+      if (role === undefined && status === 'disabled') {
+        const writers = Object.keys(ROLES).filter(r => can(r, 'admins.write'));
+        const solo = await (await db()).tx(async q => {
+          if (await repo.admins.activeWithRolesExcept(q, writers, req.admin.id) > 0) return null;
+          return applyAdminUpdate(q, req.params.id, {status}, {approver: req.admin, ap: {solo: true, reason, requestedBy: req.admin.id}});
+        });
+        if (solo) return res.json({...solo, approved: true, singleAdmin: true});
+      }
       const approval = await requestApproval(req, {kind: 'admin_update', target: req.params.id, reason, payload: {...(role !== undefined && {role}), ...(status !== undefined && {status})}, check: async q => {
         const a = await repo.admins.byId(q, req.params.id);
         if (!a) throw httpError(404, 'Administrator not found.');
@@ -663,7 +674,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     const before = {role: a.role, status: a.status};
     await repo.admins.update(q, a.id, next);
     if (next.status === 'disabled' || next.role !== before.role) await repo.adminSessions.removeForAdmin(q, a.id);
-    await audit(q, {event: 'admin_updated', actor: {type: 'admin', id: approver.id, role: approver.role}, target: {type: 'admin', id: a.id}, meta: {before, after: next, reason: ap.reason, requestedBy: ap.requestedBy, approvedBy: approver.id, approvalId: ap.id}});
+    await audit(q, {event: 'admin_updated', actor: {type: 'admin', id: approver.id, role: approver.role}, target: {type: 'admin', id: a.id}, meta: {before, after: next, reason: ap.reason, requestedBy: ap.requestedBy, approvedBy: approver.id, ...(ap.id ? {approvalId: ap.id} : {}), ...(ap.solo ? {singleAdmin: true} : {})}});
     return {admin: publicAdmin({...a, ...next})};
   }
 

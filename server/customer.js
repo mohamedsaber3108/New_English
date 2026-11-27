@@ -300,7 +300,7 @@ export function customerRouter() {
     if (!await checkPassword(String(req.body?.password || ''), req.customer.password)) return res.status(403).json({error: 'كلمة المرور غير صحيحة.'});
     await (await getDb()).tx(async q => {
       await repo.users.remove(q, req.customer.id);
-      await q.query("UPDATE audit_log SET legacy = jsonb_set(legacy, '{userId}', 'null') WHERE hash IS NULL AND legacy->>'userId' = $1", [req.customer.id]);
+      await repo.audit.forgetUser(q, req.customer.id);
     });
     res.setHeader('Set-Cookie', clearCookie);
     res.json({ok: true});

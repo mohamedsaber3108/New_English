@@ -77,10 +77,16 @@ changing their role ends their sessions immediately.
 - Refund, manual entitlement grant or revoke, administrator create, role or status change and MFA reset need the
   password entered again (Admin console asks; valid 5 minutes) and a written reason of at least 5 characters, stored in
   the audit entry. Without it the API answers 403 `{stepUp:true}`.
+- Manual payment activation and learner suspend/reactivate also need step-up (and a reason).
 - Refunds and administrator role/status changes also need a **different** administrator with the permission to approve
-  (console: *طلبات الموافقة*, or `POST /api/admin/approvals/:id/approve`). Requests expire after 24 hours. The requester
-  cannot approve. With one owner only, role changes cannot be approved: create a second owner first
-  (`npm run admin:create`).
+  (console: *طلبات الموافقة*, or `POST /api/admin/approvals/:id/approve`). Requests expire after 24 hours (an expired
+  request no longer blocks a new one). The requester cannot approve. Role changes need a second owner: create one
+  first (`npm run admin:create`).
+- Single-administrator exception: **disabling** an account (not a role change) is applied at once, with step-up and a
+  reason, when no other active administrator holds `admins.write`. The audit entry is marked `singleAdmin: true`.
+- Restricted database roles: run migrations once as the owner (`DATABASE_URL=<owner url> npm run db:migrate`), then start
+  the app and `npm run audit:retention` with `DB_SKIP_MIGRATIONS=1` (PostgreSQL only; the retention script sets it itself).
+  Account erasure updates only `audit_log.legacy`, which is granted as a column privilege in `docs/audit-roles.sql`.
 - Not built: admin export of a learner's data (no such admin route exists), bulk grants, price changes, API key rotation.
 - Entries reference people by opaque ids only, so deleting a learner account does not rewrite the log.
 

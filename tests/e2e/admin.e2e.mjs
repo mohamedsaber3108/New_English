@@ -81,6 +81,19 @@ try {
   await form.locator('input').first().fill('BANK-' + RUN);
   await form.locator('textarea').fill('Transfer matched in bank statement');
   await form.getByRole('button', {name: 'تأكيد'}).click();
+  // activation is a sensitive action: the step-up dialog asks for the password again
+  const su = page.getByRole('dialog', {name: 'تأكيد إجراء حساس'});
+  await su.waitFor({timeout: 10000});
+  ok(true, 'a sensitive action opens the step-up dialog (labelled dialog)');
+  ok(await su.locator('input[type=password]').evaluate(el => el === document.activeElement), 'focus moves into the dialog (password field)');
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
+  ok(await su.evaluate(el => el.contains(document.activeElement)), 'focus stays inside the dialog while tabbing');
+  await su.locator('input[type=password]').fill('wrong-password-000');
+  await su.getByRole('button', {name: 'تأكيد'}).click();
+  await su.getByText('كلمة المرور غير صحيحة.').waitFor({timeout: 10000});
+  ok(true, 'a wrong password shows an error and keeps the dialog open');
+  await su.locator('input[type=password]').fill(PW);
+  await su.getByRole('button', {name: 'تأكيد'}).click();
   await page.getByText('تم تفعيل الطلب والاشتراك.').waitFor({timeout: 10000});
   ok(true, 'activation succeeds from the Orders screen');
   ok((await api('/api/feedback', {method: 'POST', cookie: learner, body: {text: 'Now I have access.'}})).status === 200, 'API confirms: the learner now has paid access');
@@ -118,27 +131,19 @@ try {
   await create.waitFor({timeout: 10000});
   await fillCreate();
   await create.getByRole('button', {name: 'إنشاء الحساب'}).click();
+  // The password was confirmed minutes ago (still valid), so the dialog only asks for the written reason.
   const dlg = page.getByRole('dialog', {name: 'تأكيد إجراء حساس'});
   await dlg.waitFor({timeout: 10000});
-  ok(true, 'a sensitive action opens the step-up dialog (labelled dialog)');
-  ok(await dlg.locator('input[type=password]').evaluate(el => el === document.activeElement), 'focus moves into the dialog (password field)');
+  ok(await dlg.locator('input[type=password]').count() === 0 && await dlg.locator('textarea').evaluate(el => el === document.activeElement), 'within the 5-minute window the dialog asks only for the reason and focuses it');
   await page.keyboard.press('Escape');
   await dlg.waitFor({state: 'hidden', timeout: 5000});
   ok(await page.locator('.ad-table', {hasText: newEmail}).count() === 0, 'Esc closes the dialog (no administrator was created)');
   await create.getByRole('button', {name: 'إنشاء الحساب'}).click();
   await dlg.waitFor({timeout: 10000});
-  // focus trap: Tab from the last control wraps to the first
-  for (let i = 0; i < 6; i++) await page.keyboard.press('Tab');
-  ok(await dlg.evaluate(el => el.contains(document.activeElement)), 'focus stays inside the dialog while tabbing');
-  await dlg.locator('input[type=password]').fill('wrong-password-000');
   await dlg.locator('textarea').fill('New support agent for the team');
   await dlg.getByRole('button', {name: 'تأكيد'}).click();
-  await dlg.getByText('كلمة المرور غير صحيحة.').waitFor({timeout: 10000});
-  ok(true, 'a wrong password shows an error and keeps the dialog open');
-  await dlg.locator('input[type=password]').fill(PW);
-  await dlg.getByRole('button', {name: 'تأكيد'}).click();
   await page.getByText('تم إنشاء حساب المشرف.').waitFor({timeout: 10000});
-  ok(true, 'correct password and reason complete the action');
+  ok(true, 'the written reason completes the action');
 
   // ---- mobile layout ----
   await page.setViewportSize({width: 390, height: 844});

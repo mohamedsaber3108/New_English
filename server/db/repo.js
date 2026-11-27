@@ -193,6 +193,7 @@ export const admins = {
     vals.push(id);
     await q.query(`UPDATE admins SET ${sets.join(', ')} WHERE id = $${vals.length}`, vals);
   },
+  async activeWithRolesExcept(q, roles, id) { return Number((await q.query("SELECT count(*) AS n FROM admins WHERE role = ANY($1) AND status = 'active' AND id <> $2", [roles, id])).rows[0].n); },
   async activeOwnersExcept(q, id) { return Number((await q.query("SELECT count(*) AS n FROM admins WHERE role = 'owner' AND status = 'active' AND id <> $1", [id])).rows[0].n); },
   async list(q, {needle = '', page: p, pageSize} = {}) {
     const pg = page(p, pageSize), vals = [], w = needle ? (vals.push(like(needle)), 'WHERE email ILIKE $1 OR name ILIKE $1 OR role ILIKE $1') : '';
@@ -203,6 +204,8 @@ export const admins = {
 };
 const toAdminSession = r => r && {id: r.id, hash: r.hash, adminId: r.admin_id, stage: r.stage, attempts: r.attempts, createdAt: num(r.created_at), lastSeen: num(r.last_seen), expires: num(r.expires), device: r.device, stepUpAt: r.step_up_at == null ? null : num(r.step_up_at)};
 export const adminSessions = {
+  // Atomic: parallel wrong passwords cannot both read the same counter.
+  async bumpAttempts(q, id) { return Number((await q.query('UPDATE admin_sessions SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts', [id])).rows[0]?.attempts ?? 0); },
   async setStepUp(q, id, at) { await q.query('UPDATE admin_sessions SET step_up_at = $1, attempts = 0 WHERE id = $2', [at, id]); },
   async create(q, s) { await q.query('INSERT INTO admin_sessions (id, hash, admin_id, stage, attempts, created_at, last_seen, expires, device) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [s.id, s.hash, s.adminId, s.stage || 'full', s.attempts || 0, s.createdAt, s.lastSeen, s.expires, s.device || null]); },
   async byHash(q, hash, {lock = false} = {}) { return toAdminSession((await q.query(`SELECT * FROM admin_sessions WHERE hash = $1${lock ? ' FOR UPDATE' : ''}`, [hash])).rows[0]); },
@@ -218,6 +221,8 @@ export const adminSessions = {
 const toApproval = r => r && {id: r.id, kind: r.kind, target: r.target, payload: r.payload || {}, reason: r.reason, requestedBy: r.requested_by, requestedAt: num(r.requested_at), status: r.status, decidedBy: r.decided_by, decidedAt: r.decided_at == null ? null : num(r.decided_at), decisionReason: r.decision_reason};
 export const approvals = {
   async create(q, a) { await q.query('INSERT INTO admin_approvals (id, kind, target, payload, reason, requested_by, requested_at) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)', [a.id, a.kind, a.target, J(a.payload), a.reason, a.requestedBy, a.requestedAt]); },
+  // Marks pending requests for this item that were requested before `cutoff` as expired (frees the one-open-request slot).
+  async expireStale(q, kind, target, cutoff) { await q.query("UPDATE admin_approvals SET status = 'expired', decided_at = $4 WHERE status = 'pending' AND kind = $1 AND target = $2 AND requested_at < $3", [kind, target, cutoff, Date.now()]); },
   async byId(q, id, {lock = false} = {}) { return toApproval((await q.query(`SELECT * FROM admin_approvals WHERE id = $1${lock ? ' FOR UPDATE' : ''}`, [id])).rows[0]); },
   async decide(q, id, {status, decidedBy, decidedAt, decisionReason = null}) { await q.query('UPDATE admin_approvals SET status = $1, decided_by = $2, decided_at = $3, decision_reason = $4 WHERE id = $5', [status, decidedBy, decidedAt, decisionReason, id]); },
   async list(q, {status = '', kinds = []} = {}) {
@@ -273,6 +278,9 @@ export const audit = {
     const rows = (await q.query(`SELECT * FROM audit_log ${w} ORDER BY seq DESC LIMIT ${pg.pageSize} OFFSET ${pg.offset}`, vals)).rows.map(r => ({...toEntry(r), legacy: r.legacy}));
     return paged(rows, total, pg);
   },
+  // Account erasure: detaches pre-chain (legacy) rows from a user. Touches only the `legacy` column, which is not part of
+  // any entry hash, so the insert-only app role needs just UPDATE (legacy) on audit_log (docs/audit-roles.sql).
+  async forgetUser(q, userId) { await q.query("UPDATE audit_log SET legacy = jsonb_set(legacy, '{userId}', 'null') WHERE hash IS NULL AND legacy->>'userId' = $1", [userId]); },
   async events(q) { return (await q.query('SELECT DISTINCT event FROM audit_log ORDER BY event')).rows.map(r => r.event); },
   // Streams the chain in pages so verification stays bounded in memory for very large logs.
   async verify(q, pageSize = 5000) {
