@@ -15,3 +15,7 @@
   .c-receipt dt{color:#555!important}
   .c-noprint{display:none!important}
 }
+/* U-3: no animation or transition and no smooth scrolling when the visitor asks for reduced motion. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
