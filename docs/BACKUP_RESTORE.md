@@ -30,6 +30,16 @@ Set `BACKUP_S3_URI=s3://<bucket>/usam-language` in `/etc/usam-language.env` for 
 instance role with `s3:PutObject` on that prefix; enable bucket versioning and a lifecycle rule). Local retention:
 `BACKUP_RETENTION_DAYS` (default 30). On RDS, also keep automated snapshots / point-in-time recovery enabled.
 
+## Status in the admin console (A-7)
+
+After every run `backup.sh` writes `BACKUP_STATUS_FILE` (default `/var/lib/usam-language/backup-status.json`): time (UTC),
+file name, size, SHA-256 and result of the last good backup, plus the last attempt. A restore drill run with
+`scripts/restore.sh <file> --record-test` adds the date and result of the last restore test. The console (Overview,
+card «النسخ الاحتياطي», permission `dashboard.read`, API `GET /api/admin/backup-status`) shows these and warns when the
+last good backup is older than 26 hours or the last attempt failed. It is read-only: there is no restore button.
+Writing the file needs `node` on the PATH of the backup job (the app host has it); a write problem prints a warning and
+never fails the backup. The file holds no secrets.
+
 ## Restore
 
 1. Create a **new, empty** database (never restore over production first).
@@ -43,3 +53,4 @@ instance role with `s3:PutObject` on that prefix; enable bucket versioning and a
 ## Drill
 
 Run a restore drill at least quarterly and after any schema migration. Record date, archive, duration and result.
+Add `--record-test` to the `restore.sh` command of the drill so the console shows the date and result.

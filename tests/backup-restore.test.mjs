@@ -7,7 +7,7 @@
 // Skips when neither is set. With PG_TOOLS_LOCAL=1 missing tools are a FAILURE, never a skip.
 import {spawn, execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, rm, readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {freePort, stopServer} from './helpers.mjs';
@@ -91,11 +91,18 @@ try {
     await sh(`sed -i "s/\\r$//" /tmp/backup.sh /tmp/restore.sh && chmod +x /tmp/backup.sh /tmp/restore.sh && rm -rf ${bk}`);
   }
   const tBackup = Date.now();
-  const b = await sh(`"${SCRIPT('backup.sh')}" "${bk}"`, {DATABASE_URL: toolsUrl(src)});
+  const statusFile = join(dir, 'backup-status.json'); // A-7: backup.sh / restore.sh write the admin status file (needs node on PATH: local mode only)
+  const b = await sh(`"${SCRIPT('backup.sh')}" "${bk}"`, {DATABASE_URL: toolsUrl(src), ...(LOCAL ? {BACKUP_STATUS_FILE: statusFile} : {})});
   const backupSecs = secs(tBackup);
   const file = b.out.trim().split('\n').pop();
   ok(b.code === 0 && /usam-\d{8}T\d{6}Z\.dump$/.test(file), `backup.sh wrote a validated archive (${file.split('/').pop()}, ${backupSecs}s)`);
   ok((await sh(`test -f "${file}.sha256" && test ! -e "${file}.partial" && stat -c %a "${bk}" "${file}"`)).out.trim().split('\n').join(',') === '700,600', 'checksum written, no partial file left, directory 700 and archive 600');
+  if (LOCAL) {
+    const st = JSON.parse(await readFile(statusFile, 'utf8'));
+    const size = Number((await sh(`stat -c %s "${file}"`)).out.trim());
+    const sum = (await sh(`cut -d' ' -f1 "${file}.sha256"`)).out.trim();
+    ok(st.lastBackup?.result === 'ok' && st.lastBackup.file === file.split('/').pop() && st.lastBackup.sizeBytes === size && st.lastBackup.sha256 === sum && !!Date.parse(st.lastBackup.at), 'backup.sh wrote the status file (time, file name, size, sha256, result ok)');
+  }
   ok((await sh(`"${SCRIPT('backup.sh')}" "${bk}"`, {DATABASE_URL: ''})).code !== 0, 'backup.sh refuses to run without DATABASE_URL');
 
   // ---------- restore safety checks ----------
@@ -107,9 +114,14 @@ try {
 
   // ---------- restore into a NEW database ----------
   const tRestore = Date.now();
-  const r = await sh(`"${SCRIPT('restore.sh')}" "${file}"`, {TARGET_DATABASE_URL: toolsUrl(dst), RESTORE_CONFIRM: 'yes'});
+  const r = await sh(`"${SCRIPT('restore.sh')}" "${file}" --record-test`, {TARGET_DATABASE_URL: toolsUrl(dst), RESTORE_CONFIRM: 'yes', ...(LOCAL ? {BACKUP_STATUS_FILE: statusFile} : {})});
   const restoreSecs = secs(tRestore);
   ok(r.code === 0 && /Restored/.test(r.out), `restore.sh restored the archive into a fresh database (${restoreSecs}s)`);
+
+  if (LOCAL) {
+    const st = JSON.parse(await readFile(statusFile, 'utf8'));
+    ok(st.lastRestoreTest?.result === 'ok' && !!Date.parse(st.lastRestoreTest.at) && st.lastBackup?.result === 'ok', 'restore.sh --record-test recorded the drill result and kept the backup details');
+  }
 
   // ---------- row counts: every table, before the app touches the restored database ----------
   const dstCounts = await rowCounts(dst);

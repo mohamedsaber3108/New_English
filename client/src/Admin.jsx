@@ -145,11 +145,32 @@ function SignIn({onSignedIn, expired}) {
     </form></section>;
 }
 
+// ---------------------------------------------------------------- backup status (read-only; there is no restore button)
+const BACKUP_STALE_MS = 26 * 3600 * 1000;
+const fmtSize = n => n == null ? '—' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+function BackupCard({status}) {
+  if (!status) return <div className="x-card"><h2><FileClock size={20} aria-hidden="true"/> النسخ الاحتياطي</h2><p>جاري التحميل…</p></div>;
+  const b = status.lastBackup, t = status.lastRestoreTest;
+  const stale = b?.at ? Date.now() - Date.parse(b.at) > BACKUP_STALE_MS : false;
+  const warn = !status.configured ? (status.problem ? 'ملف حالة النسخ الاحتياطي غير صالح أو لا يمكن قراءته.' : 'لا توجد حالة نسخ احتياطي بعد. تأكد من تشغيل المهمة اليومية للنسخ الاحتياطي.')
+    : !b ? 'لا توجد نسخة ناجحة مسجلة.' : status.lastAttempt?.result === 'failed' ? 'آخر محاولة نسخ احتياطي فشلت. راجع سجل الخدمة على الخادم.' : stale ? 'آخر نسخة ناجحة أقدم من ٢٦ ساعة. تحقق من المهمة اليومية.' : '';
+  return <div className="x-card ad-backup"><h2><FileClock size={20} aria-hidden="true"/> النسخ الاحتياطي</h2>
+    {warn && <Notice kind="error">{warn}</Notice>}
+    {status.configured && <div className="ad-kv">
+      <span>آخر نسخة ناجحة</span><b>{b ? fmtDate(b.at) : '—'}</b>
+      <span>الحجم</span><b lang="en" dir="ltr">{b ? fmtSize(b.sizeBytes) : '—'}</b>
+      <span>التحقق من البصمة (SHA-256)</span>{b?.sha256 && b.result === 'ok' ? <span><Badge tone="good">سليمة</Badge> <code lang="en" dir="ltr">{b.sha256.slice(0, 12)}…</code></span> : <Badge tone="warn">غير متوفرة</Badge>}
+      <span>آخر اختبار استعادة</span>{t ? <span>{fmtDate(t.at)} <Badge tone={t.result === 'ok' ? 'good' : 'bad'}>{t.result === 'ok' ? 'نجح' : 'فشل'}</Badge></span> : <Badge tone="warn">لم يُسجَّل بعد</Badge>}
+    </div>}
+    <p><small>للعرض فقط. الاستعادة تتم على الخادم وفق دليل النسخ الاحتياطي.</small></p>
+  </div>;
+}
+
 // ---------------------------------------------------------------- overview
 function Overview({onAuthLost}) {
-  const [d, setD] = useState(null), [err, setErr] = useState('');
+  const [d, setD] = useState(null), [err, setErr] = useState(''), [bs, setBs] = useState(null);
   const load = async () => { setErr(''); try { setD(await adminApi('overview')); } catch (e) { if (e.status === 401) onAuthLost(); else setErr(e.message); } };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); adminApi('backup-status').then(setBs).catch(e => { if (e.status === 401) onAuthLost(); else setBs({configured: false, problem: 'unreadable'}); }); }, []);
   if (err) return <Notice kind="error">{err}</Notice>;
   if (!d) return <div className="ad-empty">جاري التحميل…</div>;
   const cards = [['المتعلمون', d.users], ['اشتراكات نشطة', d.activeEntitlements], ['بريد مؤكد', d.verified], ['حسابات موقوفة', d.suspended], ['طلبات مدفوعة', d.paidOrders], ['طلبات معلقة', d.pendingOrders], ['طلبات مستردة', d.refundedOrders], ['إيراد مسجل (جنيه)', d.revenuePaidEGP.toLocaleString('en-US')], ['تذاكر مفتوحة', d.openTickets], ['طلبات تواصل جديدة', d.newLeads]];
@@ -159,6 +180,7 @@ function Overview({onAuthLost}) {
   return <div className="ad-stack">
     {d.configWarnings?.length > 0 && <div className="x-card ad-config"><h2>تنبيهات إعداد الخادم ({d.configWarnings.length})</h2><p>إعدادات بيئة التشغيل التي تحتاج مراجعة قبل الإطلاق. لا تُعرض أي قيم سرية.</p><ul>{d.configWarnings.map(w => <li key={w.key}><code lang="en" dir="ltr">{w.key}</code> <span lang="en" dir="ltr">{w.message}</span></li>)}</ul></div>}
     <div className="ad-metrics">{cards.map(([l, v]) => <div className="ad-metric" key={l}><small>{l}</small><strong>{v}</strong></div>)}</div>
+    <BackupCard status={bs}/>
     <div className="x-card"><h2><Activity size={20} aria-hidden="true"/> حالة التكاملات</h2><p>تُعرض حالة الإعداد فقط؛ لا تُعرض أي مفاتيح سرية.</p>
       <div className="ad-integrations">{Object.entries(d.integrations || {}).map(([k, v]) => <div key={k}><span>{INTEGRATION[k] || k}</span><Badge tone={tone(v)}>{VALUE[String(v)] || String(v)}</Badge></div>)}</div></div>
   </div>;

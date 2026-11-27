@@ -52,6 +52,26 @@ const clean = (v, max = 120) => String(v ?? '').trim().slice(0, max);
 const nowIso = () => new Date().toISOString();
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
+// Backup status written by scripts/backup.sh and scripts/restore.sh --record-test (see scripts/backup-status.mjs).
+// Only known fields with the expected types are passed on; anything else in the file is ignored.
+const isoOrNull = v => typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null;
+const resultOf = v => v === 'ok' || v === 'failed' ? v : null;
+export async function readBackupStatus(file = process.env.BACKUP_STATUS_FILE || '/var/lib/usam-language/backup-status.json') {
+  let raw;
+  try { raw = await readFile(file, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return {configured: false}; return {configured: false, problem: 'unreadable'}; }
+  let j;
+  try { j = JSON.parse(raw); } catch { return {configured: false, problem: 'malformed'}; }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return {configured: false, problem: 'malformed'};
+  const b = j.lastBackup, t = j.lastRestoreTest, a = j.lastAttempt;
+  return {
+    configured: true,
+    lastBackup: b && isoOrNull(b.at) ? {at: isoOrNull(b.at), file: String(b.file || '').slice(0, 120), sizeBytes: Number.isFinite(b.sizeBytes) ? b.sizeBytes : null, sha256: /^[a-f0-9]{64}$/.test(b.sha256 || '') ? b.sha256 : null, result: resultOf(b.result)} : null,
+    lastAttempt: a && isoOrNull(a.at) ? {at: isoOrNull(a.at), result: resultOf(a.result)} : null,
+    lastRestoreTest: t && isoOrNull(t.at) ? {at: isoOrNull(t.at), result: resultOf(t.result)} : null,
+  };
+}
+
 export const publicAdmin = a => ({id: a.id, email: a.email, name: a.name, role: a.role, status: a.status, createdAt: a.createdAt, lastLoginAt: a.lastLoginAt || null, mfaEnabled: !!a.mfa?.enabled});
 
 // ---- MFA (TOTP) settings ----
@@ -296,6 +316,10 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
   // ---------------- Overview ----------------
   router.get('/admin/overview', requireAdmin('dashboard.read'), async (_req, res) => {
     try { res.json({...await repo.overview(await db()), integrations: integrations(), configWarnings: configFindings()}); } catch (e) { fail(res, e); }
+  });
+
+  router.get('/admin/backup-status', requireAdmin('dashboard.read'), async (_req, res) => {
+    try { res.json(await readBackupStatus()); } catch (e) { fail(res, e); }
   });
 
   // ---------------- Users ----------------

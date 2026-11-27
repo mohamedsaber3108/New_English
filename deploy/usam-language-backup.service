@@ -17,3 +17,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/backups/usam-language
+# /var/lib/usam-language/backup-status.json (written by backup.sh, read by the admin console). Keep this value
+# in sync with BACKUP_STATUS_FILE if you change it in /etc/usam-language.env.
+StateDirectory=usam-language
+StateDirectoryMode=0755
