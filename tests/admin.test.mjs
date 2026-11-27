@@ -38,6 +38,7 @@ async function call(origin, path, {method = 'GET', body, cookie, headers = {}} =
   return {status: r.status, data, setCookie: r.headers.get('set-cookie') || ''};
 }
 const cookieOf = r => r.setCookie.split(';')[0];
+const stepUp = (origin, cookie, password = PW) => call(origin, '/api/admin/auth/step-up', {method: 'POST', cookie, body: {password}});
 async function adminLogin(origin, email, password = PW) { const r = await call(origin, '/api/admin/auth/login', {method: 'POST', body: {email, password}}); return {r, cookie: cookieOf(r)}; }
 
 // With PostgreSQL, run against a dedicated throwaway database so this suite never shares state
@@ -85,16 +86,25 @@ try {
   ok(me.data.admin?.role === 'owner' && me.data.permissions.includes('admins.write'), '/auth/me returns role and permissions');
   ok(!('password' in (me.data.admin || {})), 'admin password hash is never returned');
 
+  // --- step-up ---
+  const noStep = await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `ns-${RUN}@example.com`, name: 'No Step', role: 'viewer', password: PW, reason: 'testing step-up'}});
+  ok(noStep.status === 403 && noStep.data.stepUp === true && /password/i.test(noStep.data.error), 'sensitive route without step-up -> 403 {stepUp:true} with a plain message');
+  const badStep = await stepUp(O, owner.cookie, 'wrong-password-123');
+  ok(badStep.status === 403 && !badStep.data.stepUp, 'wrong password at step-up is refused');
+  ok((await stepUp(O, owner.cookie)).status === 200, 'correct password at step-up succeeds');
+
   // --- staff accounts ---
-  const mk = async (role) => (await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `${role}-${RUN}@example.com`, name: role + ' person', role, password: PW}}));
+  const mk = async (role) => (await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `${role}-${RUN}@example.com`, name: role + ' person', role, password: PW, reason: 'new team member'}}));
+  ok((await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `nr-${RUN}@example.com`, name: 'No Reason', role: 'viewer', password: PW}})).status === 400, 'admin create without a reason -> 400');
   const created = {};
   for (const role of ['admin', 'finance', 'support', 'viewer']) created[role] = await mk(role);
   ok(Object.values(created).every(r => r.status === 201), 'owner creates admin, finance, support and viewer accounts');
   ok((await mk('support')).status === 409, 'duplicate administrator email -> 409');
-  ok((await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `x-${RUN}@example.com`, name: 'X', role: 'viewer', password: 'short'}})).status === 400, 'weak admin password -> 400');
-  ok((await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `y-${RUN}@example.com`, name: 'Y', role: 'superuser', password: PW}})).status === 400, 'unknown role -> 400');
+  ok((await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `x-${RUN}@example.com`, name: 'X', role: 'viewer', password: 'short', reason: 'weak password check'}})).status === 400, 'weak admin password -> 400');
+  ok((await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: `y-${RUN}@example.com`, name: 'Y', role: 'superuser', password: PW, reason: 'unknown role check'}})).status === 400, 'unknown role -> 400');
   const s = {};
   for (const role of ['admin', 'finance', 'support', 'viewer']) s[role] = (await adminLogin(O, `${role}-${RUN}@example.com`)).cookie;
+  await stepUp(O, s.finance); await stepUp(O, s.admin);
 
   // --- learner side setup ---
   const learnerEmail = `learner-${RUN}@example.com`;
@@ -137,12 +147,28 @@ try {
   ok((await call(O, `/api/admin/orders/${order1}/activate`, {method: 'POST', cookie: s.finance, body: {paymentReference: PAY2, reason: 'double activation'}})).status === 409, 'activating an already-paid order -> 409');
   const orders = await call(O, `/api/admin/orders?status=paid&q=${encodeURIComponent(learnerEmail)}`, {cookie: s.viewer});
   ok(orders.data.total === 1 && orders.data.items[0].reference === order1, 'orders filter by status and customer email');
-  const ref = await call(O, `/api/admin/orders/${order1}/refund`, {method: 'POST', cookie: s.finance, body: {reason: 'customer requested refund'}});
-  ok(ref.status === 200 && ref.data.order.status === 'refunded' && ref.data.entitlementRevoked === true, 'refund recorded and the paid entitlement revoked');
+  ok((await call(O, `/api/admin/orders/${order1}/refund`, {method: 'POST', cookie: s.finance, body: {}})).status === 400, 'refund without a reason -> 400');
+  ok((await call(O, `/api/admin/orders/${order1}/refund`, {method: 'POST', cookie: s.finance, body: {reason: 'abc'}})).status === 400, 'refund reason shorter than 5 characters -> 400');
+  const refReq = await call(O, `/api/admin/orders/${order1}/refund`, {method: 'POST', cookie: s.finance, body: {reason: 'customer requested refund'}});
+  const apId = refReq.data.approval?.id;
+  ok(refReq.status === 202 && refReq.data.pending === true && apId, 'refund request is stored as pending (202), not applied');
+  ok((await call(O, '/api/feedback', {method: 'POST', cookie: learner, body: {text: 'Still paid.'}})).status === 200, 'a pending refund changes nothing yet');
+  ok((await call(O, `/api/admin/orders/${order1}/refund`, {method: 'POST', cookie: s.finance, body: {reason: 'duplicate request'}})).status === 409, 'a second request for the same order -> 409');
+  const own = await call(O, `/api/admin/approvals/${apId}/approve`, {method: 'POST', cookie: s.finance, body: {reason: 'approving my own request'}});
+  ok(own.status === 403 && /own request/i.test(own.data.error), 'the requester cannot approve their own refund (403)');
+  ok((await call(O, `/api/admin/approvals/${apId}/approve`, {method: 'POST', cookie: s.viewer, body: {reason: 'viewer tries to approve'}})).status === 403, 'a viewer cannot approve (step-up or permission gate)');
+  const pendingList = await call(O, '/api/admin/approvals', {cookie: owner.cookie});
+  ok(pendingList.data.items.some(i => i.id === apId && i.requestedByLabel === `finance-${RUN}@example.com`), 'approver sees the pending request with the requester');
+  ok((await call(O, `/api/admin/approvals/${apId}/approve`, {method: 'POST', cookie: owner.cookie, body: {}})).status === 400, 'approval without a reason -> 400');
+  const ref = await call(O, `/api/admin/approvals/${apId}/approve`, {method: 'POST', cookie: owner.cookie, body: {reason: 'checked with the provider'}});
+  ok(ref.status === 200 && ref.data.order.status === 'refunded' && ref.data.entitlementRevoked === true, 'a different administrator approves: refund recorded and the paid entitlement revoked');
   ok(/does not move funds/i.test(ref.data.notice || ''), 'refund response states that money is not moved by this action');
+  ok((await call(O, `/api/admin/approvals/${apId}/approve`, {method: 'POST', cookie: owner.cookie, body: {reason: 'approving twice'}})).status === 409, 'an approved request cannot be approved again (409)');
   ok((await call(O, '/api/feedback', {method: 'POST', cookie: learner, body: {text: 'Hello again.'}})).status === 402, 'after refund the learner is blocked again (402)');
 
   // --- manual entitlement grant / revoke ---
+  const grantNoStep = await call(O, `/api/admin/users/${learnerId}/entitlements`, {method: 'POST', cookie: s.support, body: {plan: 'plus', days: 30, reason: 'no permission'}});
+  ok(grantNoStep.status === 403 && !grantNoStep.data.stepUp, 'support cannot grant entitlements (permission checked before step-up)');
   const grant = await call(O, `/api/admin/users/${learnerId}/entitlements`, {method: 'POST', cookie: s.finance, body: {plan: 'plus', days: 30, reason: 'goodwill extension'}});
   ok(grant.status === 200 && grant.data.user.subscription?.active && grant.data.user.subscription.plan === 'plus', 'finance grants a 30-day Plus entitlement');
   ok((await call(O, '/api/feedback', {method: 'POST', cookie: learner, body: {text: 'Granted access works.'}})).status === 200, 'granted entitlement unlocks paid content');
@@ -181,10 +207,34 @@ try {
 
   // --- administrator management ---
   const meOwner = me.data.admin.id;
-  ok((await call(O, `/api/admin/admins/${meOwner}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'viewer'}})).status === 409, 'an administrator cannot change their own role');
+  ok((await call(O, `/api/admin/admins/${meOwner}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'viewer', reason: 'self change attempt'}})).status === 409, 'an administrator cannot change their own role');
   const supportId = created.support.data.admin.id;
-  const dis = await call(O, `/api/admin/admins/${supportId}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled'}});
-  ok(dis.status === 200 && dis.data.admin.status === 'disabled', 'owner disables the support administrator');
+  ok((await call(O, `/api/admin/admins/${supportId}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled'}})).status === 400, 'disabling an administrator without a reason -> 400');
+  // Single-administrator exception: with one owner (nobody else holds admins.write) a disable needs step-up + reason only.
+  const tempEmail = `temp-${RUN}@example.com`;
+  const temp = await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: tempEmail, name: 'Temp Person', role: 'viewer', password: PW, reason: 'temporary account'}});
+  const soloDis = await call(O, `/api/admin/admins/${temp.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled', reason: 'temporary account removed'}});
+  ok(soloDis.status === 200 && soloDis.data.singleAdmin === true && soloDis.data.admin.status === 'disabled', 'a single owner can disable an account without a second approver (step-up + reason still required)');
+  const soloRole = await call(O, `/api/admin/admins/${created.viewer.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'support', reason: 'role review'}});
+  ok(soloRole.status === 202, 'a role change still needs a second approver even with a single owner');
+  await call(O, `/api/admin/approvals/${soloRole.data.approval.id}/reject`, {method: 'POST', cookie: owner.cookie, body: {reason: 'withdrawn'}});
+  // A second owner is needed: role/status changes are approved by a different administrator with admins.write.
+  const owner2Email = `owner2-${RUN}@example.com`;
+  const o2 = await call(O, '/api/admin/admins', {method: 'POST', cookie: owner.cookie, body: {email: owner2Email, name: 'Second Owner', role: 'owner', password: PW, reason: 'second approver'}});
+  ok(o2.status === 201, 'owner creates a second owner (the second approver)');
+  const owner2 = await adminLogin(O, owner2Email);
+  await stepUp(O, owner2.cookie);
+  const disReq = await call(O, `/api/admin/admins/${supportId}`, {method: 'PATCH', cookie: owner.cookie, body: {status: 'disabled', reason: 'left the team'}});
+  ok(disReq.status === 202 && disReq.data.pending, 'disabling an administrator is stored as a pending request');
+  ok((await call(O, '/api/admin/support', {cookie: s.support})).status === 200, 'the administrator still works while the request is pending');
+  ok((await call(O, `/api/admin/approvals/${disReq.data.approval.id}/approve`, {method: 'POST', cookie: owner.cookie, body: {reason: 'self approval'}})).status === 403, 'the requester cannot approve an administrator change (403)');
+  const noPerm = await call(O, `/api/admin/approvals/${disReq.data.approval.id}/approve`, {method: 'POST', cookie: s.finance, body: {reason: 'finance tries to approve'}});
+  ok(noPerm.status === 403 && noPerm.data.error === 'Your role does not allow this action.', 'an approver without admins.write gets 403 with the plain denied message (fresh step-up)');
+  const rejId = (await call(O, `/api/admin/admins/${created.viewer.data.admin.id}`, {method: 'PATCH', cookie: owner.cookie, body: {role: 'support', reason: 'role review'}})).data.approval?.id;
+  ok((await call(O, `/api/admin/approvals/${rejId}/reject`, {method: 'POST', cookie: owner2.cookie, body: {reason: 'not needed'}})).status === 200, 'a different administrator rejects a request');
+  ok((await call(O, `/api/admin/approvals/${rejId}/approve`, {method: 'POST', cookie: owner2.cookie, body: {reason: 'too late'}})).status === 409, 'a rejected request cannot be approved');
+  const dis = await call(O, `/api/admin/approvals/${disReq.data.approval.id}/approve`, {method: 'POST', cookie: owner2.cookie, body: {reason: 'confirmed with the manager'}});
+  ok(dis.status === 200 && dis.data.admin.status === 'disabled', 'a second owner approves: the support administrator is disabled');
   ok((await call(O, '/api/admin/support', {cookie: s.support})).status === 401, 'a disabled administrator\'s session stops working immediately');
   ok((await adminLogin(O, `support-${RUN}@example.com`)).r.status === 401, 'a disabled administrator cannot sign in');
   const roles = await call(O, '/api/admin/roles', {cookie: s.admin});
@@ -193,11 +243,13 @@ try {
   // --- audit trail ---
   const audit = await call(O, '/api/admin/audit?pageSize=100', {cookie: owner.cookie});
   const events = audit.data.items.map(e => e.event);
-  for (const ev of ['admin_login', 'admin_login_failed', 'admin_created', 'admin_permission_denied', 'order_manually_activated', 'order_refund_recorded', 'entitlement_granted', 'entitlement_revoked', 'user_status_changed', 'support_updated', 'lead_updated', 'admin_updated'])
+  for (const ev of ['admin_login', 'admin_login_failed', 'admin_created', 'admin_permission_denied', 'order_manually_activated', 'order_refund_recorded', 'admin_step_up', 'approval_requested', 'approval_approved', 'approval_rejected', 'entitlement_granted', 'entitlement_revoked', 'user_status_changed', 'support_updated', 'lead_updated', 'admin_updated'])
     ok(events.includes(ev), `audit log records ${ev}`);
   const actEntry = audit.data.items.find(e => e.event === 'order_manually_activated');
   ok(actEntry?.actorLabel === `finance-${RUN}@example.com` && actEntry.meta.reason === 'bank transfer reconciled', 'audit entry names the acting administrator and the reason');
   ok(!JSON.stringify(audit.data.items).includes(learnerEmail), 'audit entries do not contain the learner\'s email (pseudonymous ids only)');
+  const refundEntry = audit.data.items.find(e => e.event === 'order_refund_recorded');
+  ok(refundEntry?.actorLabel === ownerEmail && refundEntry.meta.reason === 'customer requested refund' && refundEntry.meta.requestedBy === created.finance.data.admin.id && refundEntry.meta.approvedBy === meOwner, 'refund audit entry holds the written reason, the requester and the approver');
   const filtered = await call(O, '/api/admin/audit?event=order_refund_recorded', {cookie: s.finance});
   ok(filtered.status === 200 && filtered.data.items.every(e => e.event === 'order_refund_recorded') && filtered.data.items.length >= 1, 'audit log filters by event (finance has audit.read)');
   const v = await call(O, '/api/admin/audit/verify', {cookie: owner.cookie});
@@ -211,12 +263,15 @@ try {
 
   // ======================= embedded PGlite: tamper evidence, idle timeout, legacy migration mode =======================
   const tFile = join(dir, 'tamper.json');
-  const tEnv = baseEnv({CUSTOMER_DB_FILE: tFile, DATABASE_URL: '', ADMIN_IDLE_MS: '1500', ADMIN_LEGACY_TOKEN: 'true', ADMIN_ACCESS_TOKEN: 'L'.repeat(40)});
+  const tEnv = baseEnv({CUSTOMER_DB_FILE: tFile, DATABASE_URL: '', ADMIN_IDLE_MS: '1500', ADMIN_STEP_UP_MS: '300', ADMIN_LEGACY_TOKEN: 'true', ADMIN_ACCESS_TOKEN: 'L'.repeat(40)});
   const tOwner = `towner-${RUN}@example.com`;
   await runCli('scripts/create-admin.mjs', ['--email', tOwner, '--name', 'Tamper Owner', '--role', 'owner'], {...tEnv, ADMIN_PASSWORD: PW});
   let T = await start(tEnv);
   let to = await adminLogin(T.origin, tOwner);
-  await call(T.origin, '/api/admin/admins', {method: 'POST', cookie: to.cookie, body: {email: `tv-${RUN}@example.com`, name: 'TV', role: 'viewer', password: PW}});
+  await stepUp(T.origin, to.cookie);
+  await call(T.origin, '/api/admin/admins', {method: 'POST', cookie: to.cookie, body: {email: `tv-${RUN}@example.com`, name: 'TV', role: 'viewer', password: PW, reason: 'tamper test viewer'}});
+  await sleep(400);
+  ok((await call(T.origin, '/api/admin/admins', {method: 'POST', cookie: to.cookie, body: {email: `te-${RUN}@example.com`, name: 'TE', role: 'viewer', password: PW, reason: 'expired step-up'}})).data.stepUp === true, 'step-up expires after its time window');
   ok((await call(T.origin, '/api/admin/audit/verify', {cookie: to.cookie})).data.ok === true, 'fresh chain verifies before tampering');
   const legacy = await call(T.origin, '/api/admin/overview', {headers: {Authorization: 'Bearer ' + 'L'.repeat(40)}});
   ok(legacy.status === 200, 'ADMIN_LEGACY_TOKEN=true: legacy token can still read (migration mode)');

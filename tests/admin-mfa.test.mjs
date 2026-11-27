@@ -114,6 +114,8 @@ try {
   const fourthId = (await call('/api/admin/auth/me', {cookie: fv})).data.admin.id;
   const ownerId = (await call('/api/admin/auth/me', {cookie: ownerB})).data.admin.id;
   const vw = (await login(viewer)).cookie;
+  ok((await call(`/api/admin/admins/${fourthId}/mfa/reset`, {method: 'POST', cookie: ownerB, body: {reason: 'lost phone ticket'}})).data.stepUp === true, 'MFA reset needs a recent password re-entry (step-up)');
+  ok((await call('/api/admin/auth/step-up', {method: 'POST', cookie: ownerB, body: {password: PW}})).status === 200, 'owner re-enters the password');
   ok((await call(`/api/admin/admins/${fourthId}/mfa/reset`, {method: 'POST', cookie: vw, body: {reason: 'lost phone ticket'}})).status === 403, 'a viewer cannot reset someone else\'s MFA');
   ok((await call(`/api/admin/admins/${fourthId}/mfa/reset`, {method: 'POST', cookie: ownerB, body: {}})).status === 400, 'MFA reset requires a reason');
   ok((await call(`/api/admin/admins/${ownerId}/mfa/reset`, {method: 'POST', cookie: ownerB, body: {reason: 'self reset attempt'}})).status === 409, 'an admin cannot reset their own MFA through the admin endpoint');

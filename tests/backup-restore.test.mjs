@@ -76,6 +76,7 @@ try {
   await call(S.origin, '/api/customer/profile', {method: 'PUT', cookie: reg.cookie, body: {profile: {goal: 'Career & interviews', level: 'B1'}}});
   const order = (await call(S.origin, '/api/customer/orders', {method: 'POST', cookie: reg.cookie, body: {plan: 'plus', term: 'yearly', language: 'English'}})).data.reference;
   const ow = await call(S.origin, '/api/admin/auth/login', {method: 'POST', body: {email: ownerEmail, password: PW}});
+  await call(S.origin, '/api/admin/auth/step-up', {method: 'POST', cookie: ow.cookie, body: {password: PW}}); // activation needs step-up
   const act = await call(S.origin, `/api/admin/orders/${order}/activate`, {method: 'POST', cookie: ow.cookie, body: {paymentReference: 'BANK-' + RUN, reason: 'reconciled before backup'}});
   // Real practice through the learning API (progress is server-computed; the browser cannot set XP).
   const practice = await call(S.origin, '/api/customer/learning/activities', {method: 'POST', cookie: reg.cookie, body: {clientId: 'drill-' + RUN, ref: 'airport', title: 'The airport', words: ['backup', 'gate']}});

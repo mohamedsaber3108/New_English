@@ -55,21 +55,42 @@ async function createPg(url) {
     } catch (e) { try { await c.query('ROLLBACK'); } catch {} throw e; }
     finally { c.release(); }
   }
+  const skipMigrations = process.env.DB_SKIP_MIGRATIONS === '1';
+  // Migration files that are not recorded in schema_migrations (pending), and recorded names with no file (unknown).
+  const migrationDrift = async () => {
+    const files = (await readdir(MIGRATIONS)).filter(f => f.endsWith('.sql'));
+    const done = (await pool.query('SELECT name FROM schema_migrations')).rows.map(r => r.name);
+    return {pending: files.filter(f => !done.includes(f)).sort(), unknown: done.filter(n => !files.includes(n)).sort()};
+  };
   const lockClient = await pool.connect();
   let applied;
   try {
     await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK]);
-    applied = await migrate(tx);
+    // DB_SKIP_MIGRATIONS=1: do not touch the schema. For restricted database roles (insert-only audit app role,
+    // retention role) that cannot run DDL; migrations then run once as the owner role with `npm run db:migrate`.
+    applied = skipMigrations ? [] : await migrate(tx);
   } finally {
     await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]).catch(() => {});
     lockClient.release();
+  }
+  if (skipMigrations) {
+    const d = await migrationDrift().catch(e => ({error: e.message}));
+    if (d.error || d.pending?.length || d.unknown?.length) log('error', 'DB_SKIP_MIGRATIONS=1 but the schema does not match the migration files; run `npm run db:migrate` as the owner role, then restart', d);
   }
   return {
     backend: 'postgres', applied,
     stats: () => ({total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount, max: pool.options.max}),
     query: (s, p) => pool.query(s, p),
     tx,
-    health: async () => { const t = Date.now(); await pool.query('SELECT 1'); return {ok: true, backend: 'postgres', latencyMs: Date.now() - t}; },
+    health: async () => {
+      const t = Date.now(); await pool.query('SELECT 1');
+      const h = {ok: true, backend: 'postgres', latencyMs: Date.now() - t};
+      if (skipMigrations) { // restricted role: report not ready (and log) while the schema and the migration files differ
+        const d = await migrationDrift();
+        if (d.pending.length || d.unknown.length) { log('error', 'readiness: schema does not match migration files', d); return {...h, ok: false, migrations: d}; }
+      }
+      return h;
+    },
     close: () => pool.end(),
   };
 }

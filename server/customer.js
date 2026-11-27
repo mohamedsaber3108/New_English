@@ -24,6 +24,8 @@ function getDb() {
   dbPromise ??= (async () => {
     const db = await createDb({dataDir: pgliteDirFromEnv(root)});
     backendName = db.backend;
+    // A restricted (insert-only audit) role cannot DELETE audit rows, so the in-app cap would fail on every append.
+    if (process.env.DB_SKIP_MIGRATIONS === '1' && Number(process.env.AUDIT_MAX_ENTRIES || 0) > 0) log('warn', 'AUDIT_MAX_ENTRIES is set while DB_SKIP_MIGRATIONS=1 (restricted database role): the app cannot delete audit rows. Unset AUDIT_MAX_ENTRIES for the app and run `npm run audit:retention` with the retention role instead.');
     const r = await autoImport(db, {jsonFile: legacyFile});
     if (r.imported) log('info', 'legacy data imported', {source: r.source, counts: r.counts});
     return db;
@@ -300,7 +302,7 @@ export function customerRouter() {
     if (!await checkPassword(String(req.body?.password || ''), req.customer.password)) return res.status(403).json({error: 'كلمة المرور غير صحيحة.'});
     await (await getDb()).tx(async q => {
       await repo.users.remove(q, req.customer.id);
-      await q.query("UPDATE audit_log SET legacy = jsonb_set(legacy, '{userId}', 'null') WHERE hash IS NULL AND legacy->>'userId' = $1", [req.customer.id]);
+      await repo.audit.forgetUser(q, req.customer.id);
     });
     res.setHeader('Set-Cookie', clearCookie);
     res.json({ok: true});

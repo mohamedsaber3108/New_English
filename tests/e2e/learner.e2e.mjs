@@ -65,6 +65,7 @@ try {
 
   // ---- staff confirm the payment (admin API, same rules as the console) ----
   const admin = await api('/api/admin/auth/login', {method: 'POST', body: {email: ownerEmail, password: PW}});
+  await api('/api/admin/auth/step-up', {method: 'POST', cookie: admin.cookie, body: {password: PW}}); // activation needs step-up
   const act = await api(`/api/admin/orders/${orderRef}/activate`, {method: 'POST', cookie: admin.cookie, body: {paymentReference: 'BANK-' + RUN, reason: 'transfer reconciled in e2e'}});
   ok(act.status === 200, 'staff activate the reconciled payment');
 
