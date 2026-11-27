@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {randomBytes} from 'node:crypto';
 import {checkConfig} from '../server/config.js';
 import {freePort, stopServer} from './helpers.mjs';
 
@@ -10,6 +11,10 @@ let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
 const keys = env => checkConfig(env).map(f => f.key);
 const K = 'k'.repeat(40);
+const MFA_KEY = randomBytes(32).toString('hex'); // generated per run, never a literal (secret scan)
+ok(checkConfig({NODE_ENV: 'production', SITE_ORIGIN: 'https://x.com', ADMIN_MFA_KEY: MFA_KEY}).find(f => f.key === 'ADMIN_REQUIRE_MFA')?.level === 'fatal', 'production without ADMIN_REQUIRE_MFA=true is a fatal finding');
+ok(checkConfig({NODE_ENV: 'production', SITE_ORIGIN: 'https://x.com', ADMIN_REQUIRE_MFA: 'true'}).find(f => f.key === 'ADMIN_MFA_KEY')?.level === 'fatal', 'production without a 32+ character ADMIN_MFA_KEY is a fatal finding');
+ok(!checkConfig({NODE_ENV: 'test'}).some(f => f.level === 'fatal'), 'the test and development environments have no fatal findings');
 const good = {NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com', DATABASE_URL: 'postgres://x', AUDIT_HMAC_KEY: K, ADMIN_MFA_KEY: K, ADMIN_REQUIRE_MFA: 'true', REQUIRE_VERIFIED_EMAIL: 'true', RESEND_API_KEY: 're_x', EMAIL_FROM: 'a@b.c'};
 ok(checkConfig(good).length === 0, 'a complete production configuration has no findings');
 ok(checkConfig({NODE_ENV: 'production', SITE_ORIGIN: 'http://x.com'}).find(f => f.key === 'SITE_ORIGIN')?.level === 'fatal', 'non-HTTPS SITE_ORIGIN in production is fatal');
@@ -34,10 +39,17 @@ const run = env => new Promise(async resolve => {
 try {
   const bad = await run({NODE_ENV: 'production', SITE_ORIGIN: 'http://insecure.example.com'});
   ok(bad.code === 1 && /refusing to start/.test(bad.out), 'production server with an http:// origin exits with code 1 before listening');
-  const warn = await run({NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com'});
+  // E-10: production without MFA enforcement / key is refused, with a clear message naming the setting.
+  const noFlag = await run({NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com', ADMIN_MFA_KEY: MFA_KEY, ADMIN_REQUIRE_MFA: ''});
+  ok(typeof noFlag.code === 'number' && noFlag.code !== 0 && /refusing to start/.test(noFlag.out) && /ADMIN_REQUIRE_MFA=true is required in production/.test(noFlag.out), 'production without ADMIN_REQUIRE_MFA=true exits non-zero with a clear message');
+  const noKey = await run({NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com', ADMIN_REQUIRE_MFA: 'true', ADMIN_MFA_KEY: ''});
+  ok(typeof noKey.code === 'number' && noKey.code !== 0 && /ADMIN_MFA_KEY must be at least 32 characters/.test(noKey.out), 'production with ADMIN_REQUIRE_MFA=true but no ADMIN_MFA_KEY exits non-zero with a clear message');
+  const dev = await run({NODE_ENV: 'development', ADMIN_REQUIRE_MFA: '', ADMIN_MFA_KEY: ''});
+  ok(dev.code === 'running' && dev.up, 'outside production the MFA settings are not required (development still starts)');
+  const warn = await run({NODE_ENV: 'production', SITE_ORIGIN: 'https://language.example.com', ADMIN_MFA_KEY: MFA_KEY, ADMIN_REQUIRE_MFA: 'true'});
   ok(warn.code === 'running' && warn.up && /"msg":"configuration".*AUDIT_HMAC_KEY/.test(warn.out), 'a production server with only warnings starts, serves, and logs each warning');
   if (!(warn.code === 'running' && warn.up)) console.error('    detail: code=' + warn.code + ' up=' + warn.up + ' out=' + warn.out.slice(-600));
-} finally { await rm(dir, {recursive: true, force: true}); }
+} finally { await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200}); }
 if (failures) { console.error(`\nConfig tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nConfig tests passed.');
 process.exit(0);

@@ -52,7 +52,7 @@ const paid=(tier='essential')=>(req,res,next)=>{if(!customer.enforcementEnabled(
 app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:aiConfigured(),paymentConfigured:customer.paymentEnabled(),accessEnforcement:customer.enforcementEnabled(),accessMode:customer.accessMode(),storageBackend:customer.storageBackend(),languagePacks:Object.keys(packs)}));
 // Readiness: storage is reachable. Use this for load-balancer readiness/rolling-deploy gates.
 // Readiness = storage reachable. Rate-limit degradation is reported but does not fail readiness
-// (the limiter fails open to per-instance memory so the service stays available).
+// (the limiter falls back to per-instance memory limits so the service stays available and limited).
 app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h,rateLimit:limiter.status(),rooms:hub.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status(),rooms:hub.status()})}});
 // Lead anti-spam: 5 successfully saved leads per IP per hour (shared across instances when Redis is configured).
 const LEAD_LIMIT=5,LEAD_WINDOW=3600000;

@@ -3,8 +3,10 @@
 // Backends:
 //   memory (default): per-process fixed window. Fine for one instance; resets on restart.
 //   redis  (REDIS_URL): atomic INCR + PEXPIRE fixed window, shared by every app instance and
-//          surviving restarts. If Redis becomes unreachable the limiter FAILS OPEN to the in-memory
-//          window for that instance (availability over strictness) and reports it via status().
+//          surviving restarts. If Redis becomes unreachable the limiter falls back to the in-process window of
+//          that instance and reports it via status(). The limit STILL APPLIES (login, password reset, webhook and
+//          every other route): it is never "unlimited". shortcut: the fallback is per instance, so N instances
+//          allow up to N times the limit until Redis returns; make it stricter only if that matters.
 import {createClient} from 'redis';
 
 // RATE_LIMIT_PREFIX namespaces keys (e.g. per environment: staging vs production sharing one Redis, or isolated test runs).

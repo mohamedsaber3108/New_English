@@ -83,7 +83,7 @@ async function startServer(env) {
 const profileBody = n => ({profile: {name: 'Load', goal: 'Travel & everyday life', minutes: 20, assessmentDone: true, level: 'A2', xp: n, streak: 1, skills: {Speaking: 47}}});
 
 const results = [];
-const env0 = {...process.env, NODE_ENV: 'production', API_RATE_LIMIT_PER_MIN: '100000000', AUTH_IP_LIMIT: '100000000', REDIS_URL: process.env.REDIS_URL || '', RATE_LIMIT_PREFIX: 'load' + Date.now(), SITE_ORIGIN: ''};
+const env0 = {...process.env, NODE_ENV: 'production', API_RATE_LIMIT_PER_MIN: '100000000', AUTH_IP_LIMIT: '100000000', REDIS_URL: process.env.REDIS_URL || '', RATE_LIMIT_PREFIX: 'load' + Date.now(), SITE_ORIGIN: '', ADMIN_REQUIRE_MFA: 'true', ADMIN_MFA_KEY: (await import('node:crypto')).randomBytes(32).toString('hex')};
 let pgAdmin = null;
 if (BACKENDS.includes('pg')) {
   if (!process.env.DATABASE_URL) { console.error('pg backend requested but DATABASE_URL is not set'); process.exit(2); }
@@ -110,7 +110,7 @@ for (const backend of BACKENDS) for (const size of SIZES) {
     results.push({backend, size, scenario: 'seed', error: 'storage rejected the data set: ' + e.message.slice(0, 160)});
     await storage.close().catch(() => {});
     if (dbName) await pgAdmin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
-    await rm(dir, {recursive: true, force: true});
+    await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
     continue;
   }
   await storage.close();
@@ -142,7 +142,7 @@ for (const backend of BACKENDS) for (const size of SIZES) {
   } finally {
     server?.child.kill(); await sleep(500);
     if (dbName) await pgAdmin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch(() => {});
-    await rm(dir, {recursive: true, force: true});
+    await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
   }
 }
 if (pgAdmin) await pgAdmin.end();

@@ -69,7 +69,7 @@ try {
 finally {
   for (const p of procs) try { p.kill(); } catch {}
   await sleep(300);
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nObservability tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nObservability tests passed.');

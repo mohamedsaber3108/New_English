@@ -97,7 +97,7 @@ try {
   } else console.log('REDIS_URL not set — skipping multi-instance room test.');
 } finally {
   for (const p of procs) try { p.kill(); } catch {}
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nRoom tests FAILED (${failures}).`); process.exit(1); }
 console.log('\nRoom tests passed.');

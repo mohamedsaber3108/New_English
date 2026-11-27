@@ -29,4 +29,8 @@ if((await call('/api/admin/overview',{auth:admin})).r.status!==401)throw Error('
 if(!(await call('/api/customer/logout',{method:'POST'})).r.ok)throw Error('logout');
 if((await call('/api/customer/me')).r.status!==401)throw Error('logout session');
 console.log('API smoke test passed');
-}finally{child.kill('SIGTERM');await rm(dir,{recursive:true,force:true})}
+}finally{
+  // wait for the server to exit (it closes PGlite on SIGTERM) before deleting its data dir; retry if files are still going away
+  await new Promise(resolve=>{if(child.exitCode!==null||child.signalCode)return resolve();const t=setTimeout(()=>{try{child.kill('SIGKILL')}catch{}},8000);child.once('exit',()=>{clearTimeout(t);resolve()});child.kill('SIGTERM')});
+  await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:200});
+}

@@ -141,7 +141,7 @@ finally {
   if (!LOCAL) await sh('rm -rf /tmp/usam-bk /tmp/backup.sh /tmp/restore.sh');
   for (const d of [src, dst]) await admin.query(`DROP DATABASE IF EXISTS ${d} WITH (FORCE)`).catch(() => {});
   await admin.end();
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nBackup/restore drill FAILED (${failures}).`); process.exit(1); }
 console.log('\n' + (proof || 'restore drill proof: not produced'));

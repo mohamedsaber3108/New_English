@@ -80,8 +80,8 @@ Required for a public deployment:
 | `DATABASE_URL`, `PGSSL` | from step 4 |
 | `ACCESS_ENFORCEMENT` | `enforced` |
 | `AUDIT_HMAC_KEY` | 64 hex chars: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `ADMIN_MFA_KEY` | another value generated the same way (different from the audit key) |
-| `ADMIN_REQUIRE_MFA` | `true` |
+| `ADMIN_MFA_KEY` | **required in production** (32+ characters; the server refuses to start without it): another value generated the same way (different from the audit key) |
+| `ADMIN_REQUIRE_MFA` | **required in production**: must be `true` (the server refuses to start otherwise) |
 | `METRICS_TOKEN` | 48 hex chars (`randomBytes(24)`), or leave empty to disable `/api/metrics` |
 | `RESEND_API_KEY`, `EMAIL_FROM` | from Resend |
 | `PAYMOB_*` (all four) | from Paymob; checkout stays off until all four are set |
@@ -89,6 +89,8 @@ Required for a public deployment:
 Optional: `REDIS_URL` (required for 2+ instances), `OPENAI_API_KEY` and `AI_*` limits, `LOG_LEVEL`, rate limits, `BACKUP_*`. Every variable is documented inline in `.env.example`.
 
 Store `AUDIT_HMAC_KEY` and `ADMIN_MFA_KEY` in a password manager as well. Losing `ADMIN_MFA_KEY` forces every admin to re-enroll MFA. Losing `AUDIT_HMAC_KEY` means past audit entries can no longer be verified.
+
+If `/etc/usam-language.env` is missing either MFA setting, the new release exits at start; `scripts/deploy.sh` then fails its readiness check and switches back to the previous release automatically. Fix the env file first, then deploy. `npm start` sets `NODE_ENV=production` too, so it needs both settings as well.
 
 At startup the app prints a configuration report. Errors stop the process; warnings are logged. Check it with `journalctl -u usam-language | grep -i config`.
 

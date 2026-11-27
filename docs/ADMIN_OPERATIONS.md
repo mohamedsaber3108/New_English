@@ -18,7 +18,13 @@ is permission-checked on the server and recorded in a tamper-evident audit log.
    ```
    With the JSON store, run this while the service is stopped (or restart it afterwards). With PostgreSQL it takes
    effect immediately.
-3. Sign in at `#admin`, open **المشرفون والأدوار**, and create accounts for staff with the least privileged role
+   **Production refuses to start** unless `ADMIN_REQUIRE_MFA=true` and `ADMIN_MFA_KEY` (32+ characters,
+   `openssl rand -hex 32`) are both set. Set both in `/etc/usam-language.env` BEFORE the first start.
+3. **First-admin bootstrap (MFA required).** The owner from step 2 has no MFA yet. That is expected: with
+   `ADMIN_REQUIRE_MFA=true` an admin without MFA can still sign in with the password, but can only open the
+   **الأمان** (security) tab to enrol. Enrol straight away (section 7), save the recovery codes, then use the console.
+   Do not turn the flag off to "get in": the server would refuse to start.
+4. Sign in at `#admin`, open **المشرفون والأدوار**, and create accounts for staff with the least privileged role
    that fits their job. Share temporary passwords over a secure channel; staff change them from the console header.
 
 ## 2. Migrating from the shared ADMIN_ACCESS_TOKEN
@@ -70,11 +76,13 @@ The admin cookie is HttpOnly, SameSite=Strict and scoped to `/api/admin`.
 
 ## 7. Two-factor authentication (TOTP)
 
-- Set `ADMIN_MFA_KEY` (random, 32+ bytes, kept out of the database) and `ADMIN_REQUIRE_MFA=true` in production.
+- Set `ADMIN_MFA_KEY` (random, 32+ bytes, kept out of the database) and `ADMIN_REQUIRE_MFA=true` in production
+  (both are required: the server exits at start-up with a clear message if either is missing).
   With `ADMIN_REQUIRE_MFA=true` an admin without MFA can sign in but can do nothing except enroll.
 - Enroll: console header → **الأمان** → *ابدأ الإعداد*. Add the setup key to an authenticator app (Google/Microsoft
   Authenticator, 1Password, …), confirm a 6-digit code, then store the 8 recovery codes shown once.
-  A QR code is not displayed yet; use the setup key or the direct `otpauth://` link on the phone.
+  The setup key is shown as text (grouped in fours) next to the `otpauth://` link.
+  A QR code is not displayed yet (TODO).
 - Sign-in becomes two steps: password, then code (or a one-time recovery code). A challenge allows 5 attempts and
   expires after 5 minutes; codes cannot be replayed.
 - Lost phone: the owner opens **المشرفون والأدوار** → *إعادة ضبط التحقق* on that admin (after verifying their

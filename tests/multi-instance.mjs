@@ -42,7 +42,7 @@ try {
   ok((await req(two, '/api/customer/me', {cookie})).status === 401, 'logout on instance 1 invalidates the session on instance 2');
 } finally {
   for (const p of procs) try { p.kill(); } catch {}
-  await rm(dir, {recursive: true, force: true});
+  await rm(dir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
 }
 if (failures) { console.error(`\nMulti-instance test FAILED (${failures}).`); process.exit(1); }
 console.log('\nMulti-instance test passed.');
