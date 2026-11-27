@@ -263,42 +263,58 @@ export function customerRouter() {
     const obj = req.body?.obj, received = String(req.query.hmac || '');
     if (req.body?.type !== 'TRANSACTION' || !obj || !/^[a-f0-9]{128}$/i.test(received) || !safeEq(hmacTransaction(obj), received.toLowerCase())) return res.sendStatus(403);
     const db = await getDb();
-    // Everything below runs in ONE transaction: the verified event is stored (once) together with its effect. A replayed
-    // event (same provider event id) is a no-op, and a concurrent twin waits on the unique key / the locked order row.
-    // The DB also enforces one order per provider transaction id (orders_transaction_key): if that is ever violated it is
-    // treated as a replay, not a server error.
+    // Everything below runs in ONE transaction: the verified event is stored together with its effect and its outcome.
+    // Replay protection is the provider event id ("<transaction id>:<state>") plus the order status checks below; a
+    // refund/void reuses the original transaction id and a failed attempt may be followed by a success with the same id,
+    // so the transaction id alone is never a reason to skip an event. Only events already APPLIED are replays; events that
+    // were rejected, unmatched or ignored are processed again when the provider retries (e.g. the order now has its id).
+    // A concurrent twin waits on the locked event row. The DB also enforces one order per provider transaction id
+    // (orders_transaction_key); if that is ever violated the event is recorded as 'rejected' and nothing is paid.
     const state = obj.is_refunded ? 'refunded' : obj.is_voided ? 'voided' : obj.success === true && obj.pending === false ? 'success' : obj.pending === false ? 'failed' : 'pending';
+    const eventId = `${obj.id}:${state}`, rawBody = req.rawBody ?? JSON.stringify(req.body);
     let outcome;
     try {
       outcome = await db.tx(async q => {
         const order = await repo.orders.byPaymob(q, String(obj.order?.id || ''));
         const matched = order && order.reference === String(obj.order?.merchant_order_id || order.reference) ? order : null;
-        const isNew = await repo.paymentEvents.record(q, {provider: 'paymob', eventId: `${obj.id}:${state}`, orderRef: matched?.reference || null, rawBody: req.rawBody ?? JSON.stringify(req.body), signatureVerified: true});
-        if (!isNew || !matched) return {status: 200};
+        const ev = await repo.paymentEvents.claim(q, {provider: 'paymob', eventId, orderRef: matched?.reference || null, rawBody, signatureVerified: true});
+        if (ev.replay) {
+          if (ev.previousOrderRef && matched && ev.previousOrderRef !== matched.reference) log('warn', 'payment event already applied to another order', {eventId, order: matched.reference, appliedTo: ev.previousOrderRef});
+          return {status: 200};
+        }
+        const done = async (code, result) => { await repo.paymentEvents.setOutcome(q, ev.id, result, matched?.reference || null); return {status: code}; };
+        if (!matched) return done(200, 'unmatched');
         const valid = Number(obj.amount_cents) === matched.amount * 100 && obj.currency === (matched.currency || 'EGP') && String(obj.integration_id) && process.env.PAYMOB_INTEGRATION_IDS.split(',').map(x => x.trim()).includes(String(obj.integration_id));
-        if (!valid) return {status: 400};
+        if (!valid) return done(400, 'rejected');
         const o = await repo.orders.byRef(q, matched.reference, {lock: true});
         const u = o?.userId && await repo.users.lockById(q, o.userId);
-        if (!o || !u) return {status: 200};
-        if (o.transactionId === String(obj.id)) return {status: 200}; // duplicate delivery
-        if (obj.is_refunded || obj.is_voided) {
+        if (!o || !u) return done(200, 'unmatched');
+        if (state === 'refunded' || state === 'voided') {
           await repo.orders.update(q, o.reference, {status: 'refunded'});
           await repo.entitlements.removeIfOrder(q, u.id, o.language, o.reference);
-        } else if (obj.success === true && obj.pending === false) {
-          if (o.status === 'paid') return {status: 200};
+          return done(200, 'applied');
+        }
+        if (state === 'success') {
+          if (o.status === 'paid' || o.status === 'refunded') return done(200, 'ignored'); // never pay twice, never pay a refunded order
           const now = Date.now(), prior = u.entitlements[o.language];
           const d = new Date(prior?.expiresAt > now ? prior.expiresAt : now);
           d.setUTCMonth(d.getUTCMonth() + (o.term === 'yearly' ? 12 : 1));
           await repo.orders.update(q, o.reference, {status: 'paid', paidAt: new Date(now).toISOString(), expiresAt: d.getTime(), transactionId: String(obj.id)});
           await repo.entitlements.set(q, u.id, o.language, {plan: o.plan, expiresAt: d.getTime(), orderReference: o.reference, source: 'payment'});
-        } else if (obj.pending === false) {
-          await repo.orders.update(q, o.reference, {status: 'failed', transactionId: String(obj.id)});
+          return done(200, 'applied');
         }
-        return {status: 200};
+        if (state === 'failed') {
+          if (o.status === 'paid' || o.status === 'refunded') return done(200, 'ignored'); // a late failure never downgrades a paid or refunded order
+          await repo.orders.update(q, o.reference, {status: 'failed', transactionId: String(obj.id)});
+          return done(200, 'applied');
+        }
+        return done(200, 'ignored'); // pending: nothing to do yet
       });
     } catch (e) {
       if (!isUniqueViolation(e)) throw e;
-      log('warn', 'payment webhook treated as replay: unique violation', {constraint: e.constraint || null});
+      // The failed transaction rolled back, including its own event row: record the anomaly separately and pay nothing.
+      log('warn', 'payment webhook rejected: provider transaction id already belongs to another order', {eventId, constraint: e.constraint || null});
+      await repo.paymentEvents.markRejected(db, {provider: 'paymob', eventId, orderRef: String(obj.order?.merchant_order_id || '') || null, rawBody});
       outcome = {status: 200};
     }
     if (outcome.status !== 200) return res.sendStatus(outcome.status);
@@ -313,6 +329,7 @@ export function customerRouter() {
   router.delete('/customer/account', requireUser, async (req, res) => {
     if (!await checkPassword(String(req.body?.password || ''), req.customer.password)) return res.status(403).json({error: 'كلمة المرور غير صحيحة.'});
     await (await getDb()).tx(async q => {
+      await repo.paymentEvents.removeForUser(q, req.customer.id); // provider payloads hold billing data; must go before the orders do
       await repo.users.remove(q, req.customer.id);
       await q.query("UPDATE audit_log SET legacy = jsonb_set(legacy, '{userId}', 'null') WHERE hash IS NULL AND legacy->>'userId' = $1", [req.customer.id]);
     });

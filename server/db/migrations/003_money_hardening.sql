@@ -21,6 +21,7 @@ ALTER TABLE orders ADD COLUMN currency text NOT NULL DEFAULT 'EGP';
 --    "<transaction id>:<state>", state = success | failed | pending | refunded | voided), so a replayed callback is a no-op
 --    and a later state change of the same transaction (e.g. a refund) is still recorded.
 --    raw_body holds the provider's JSON as received (it includes the customer's billing data: treat as personal data).
+--    order_ref links an event to an order; rows are deleted with the learner's account (see DELETE /customer/account).
 CREATE TABLE payment_events (
   id                  bigserial PRIMARY KEY,
   provider            text NOT NULL,
@@ -28,6 +29,9 @@ CREATE TABLE payment_events (
   order_ref           text,
   raw_body            text NOT NULL,
   signature_verified  boolean NOT NULL,
+  -- What the application did with the event. Only 'applied' events are treated as replays (dropped); every other outcome
+  -- is processed again when the provider retries (e.g. 'unmatched' becomes 'applied' once the order has its provider id).
+  outcome             text NOT NULL DEFAULT 'applied' CHECK (outcome IN ('applied', 'rejected', 'unmatched', 'ignored')),
   received_at         timestamptz NOT NULL DEFAULT now(),
   UNIQUE (provider, event_id)
 );
