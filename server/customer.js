@@ -263,31 +263,45 @@ export function customerRouter() {
     const obj = req.body?.obj, received = String(req.query.hmac || '');
     if (req.body?.type !== 'TRANSACTION' || !obj || !/^[a-f0-9]{128}$/i.test(received) || !safeEq(hmacTransaction(obj), received.toLowerCase())) return res.sendStatus(403);
     const db = await getDb();
-    const order = await repo.orders.byPaymob(db, String(obj.order?.id || ''));
-    if (!order || order.reference !== String(obj.order?.merchant_order_id || order.reference)) return res.sendStatus(200);
-    const valid = Number(obj.amount_cents) === order.amount * 100 && obj.currency === 'EGP' && String(obj.integration_id) && process.env.PAYMOB_INTEGRATION_IDS.split(',').map(x => x.trim()).includes(String(obj.integration_id));
-    if (!valid) return res.sendStatus(400);
-    await db.tx(async q => {
-      const o = await repo.orders.byRef(q, order.reference, {lock: true});
-      const u = o?.userId && await repo.users.lockById(q, o.userId);
-      if (!o || !u) return;
-      if (o.transactionId === String(obj.id)) return; // duplicate delivery
-      if (obj.is_refunded || obj.is_voided) {
-        await repo.orders.update(q, o.reference, {status: 'refunded'});
-        await repo.entitlements.removeIfOrder(q, u.id, o.language, o.reference);
-        return;
-      }
-      if (obj.success === true && obj.pending === false) {
-        if (o.status === 'paid') return;
-        const now = Date.now(), prior = u.entitlements[o.language];
-        const d = new Date(prior?.expiresAt > now ? prior.expiresAt : now);
-        d.setUTCMonth(d.getUTCMonth() + (o.term === 'yearly' ? 12 : 1));
-        await repo.orders.update(q, o.reference, {status: 'paid', paidAt: new Date(now).toISOString(), expiresAt: d.getTime(), transactionId: String(obj.id)});
-        await repo.entitlements.set(q, u.id, o.language, {plan: o.plan, expiresAt: d.getTime(), orderReference: o.reference, source: 'payment'});
-      } else if (obj.pending === false) {
-        await repo.orders.update(q, o.reference, {status: 'failed', transactionId: String(obj.id)});
-      }
-    });
+    // Everything below runs in ONE transaction: the verified event is stored (once) together with its effect. A replayed
+    // event (same provider event id) is a no-op, and a concurrent twin waits on the unique key / the locked order row.
+    // The DB also enforces one order per provider transaction id (orders_transaction_key): if that is ever violated it is
+    // treated as a replay, not a server error.
+    const state = obj.is_refunded ? 'refunded' : obj.is_voided ? 'voided' : obj.success === true && obj.pending === false ? 'success' : obj.pending === false ? 'failed' : 'pending';
+    let outcome;
+    try {
+      outcome = await db.tx(async q => {
+        const order = await repo.orders.byPaymob(q, String(obj.order?.id || ''));
+        const matched = order && order.reference === String(obj.order?.merchant_order_id || order.reference) ? order : null;
+        const isNew = await repo.paymentEvents.record(q, {provider: 'paymob', eventId: `${obj.id}:${state}`, orderRef: matched?.reference || null, rawBody: req.rawBody ?? JSON.stringify(req.body), signatureVerified: true});
+        if (!isNew || !matched) return {status: 200};
+        const valid = Number(obj.amount_cents) === matched.amount * 100 && obj.currency === (matched.currency || 'EGP') && String(obj.integration_id) && process.env.PAYMOB_INTEGRATION_IDS.split(',').map(x => x.trim()).includes(String(obj.integration_id));
+        if (!valid) return {status: 400};
+        const o = await repo.orders.byRef(q, matched.reference, {lock: true});
+        const u = o?.userId && await repo.users.lockById(q, o.userId);
+        if (!o || !u) return {status: 200};
+        if (o.transactionId === String(obj.id)) return {status: 200}; // duplicate delivery
+        if (obj.is_refunded || obj.is_voided) {
+          await repo.orders.update(q, o.reference, {status: 'refunded'});
+          await repo.entitlements.removeIfOrder(q, u.id, o.language, o.reference);
+        } else if (obj.success === true && obj.pending === false) {
+          if (o.status === 'paid') return {status: 200};
+          const now = Date.now(), prior = u.entitlements[o.language];
+          const d = new Date(prior?.expiresAt > now ? prior.expiresAt : now);
+          d.setUTCMonth(d.getUTCMonth() + (o.term === 'yearly' ? 12 : 1));
+          await repo.orders.update(q, o.reference, {status: 'paid', paidAt: new Date(now).toISOString(), expiresAt: d.getTime(), transactionId: String(obj.id)});
+          await repo.entitlements.set(q, u.id, o.language, {plan: o.plan, expiresAt: d.getTime(), orderReference: o.reference, source: 'payment'});
+        } else if (obj.pending === false) {
+          await repo.orders.update(q, o.reference, {status: 'failed', transactionId: String(obj.id)});
+        }
+        return {status: 200};
+      });
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      log('warn', 'payment webhook treated as replay: unique violation', {constraint: e.constraint || null});
+      outcome = {status: 200};
+    }
+    if (outcome.status !== 200) return res.sendStatus(outcome.status);
     res.json({ok: true});
   });
 

@@ -56,14 +56,16 @@ async function createPg(url) {
     finally { c.release(); }
   }
   const lockClient = await pool.connect();
-  let applied;
+  let applied, migrateError = null;
   try {
     await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK]);
     applied = await migrate(tx);
+  } catch (e) { migrateError = e;
   } finally {
     await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK]).catch(() => {});
     lockClient.release();
   }
+  if (migrateError) { await pool.end().catch(() => {}); throw migrateError; } // a refused/failed migration must not leave the pool open
   return {
     backend: 'postgres', applied,
     stats: () => ({total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount, max: pool.options.max}),
@@ -103,7 +105,12 @@ async function createPglite(dataDir) {
   };
   // Plain queries also go through the queue so they never land inside another caller's open transaction.
   const query = (s, p) => { const run = chain.then(() => db.query(s, p)); chain = run.catch(() => {}); return run; };
-  const applied = await migrate(tx);
+  let applied;
+  try { applied = await migrate(tx); }
+  catch (e) { // a refused/failed migration must not leave the data directory open or locked
+    await chain.catch(() => {}); await db.close().catch(() => {}); if (lockFile) await unlink(lockFile).catch(() => {});
+    throw e;
+  }
   return {
     backend: 'pglite', applied, dataDir,
     stats: () => ({}),

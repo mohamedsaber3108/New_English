@@ -176,6 +176,22 @@ If the new release fails `/api/ready`, the script switches back to the previous 
 
 Migrations only move forward. Rolling back the code does not undo a schema change. The migrations shipped so far only add tables and columns, so older code keeps working on a newer schema. Take a backup before deploying a release that contains a new migration (`server/db/migrations/`).
 
+### Migration 003 (money data hardening)
+
+Adds a unique index on `orders.transaction_id` (where not NULL), the column `orders.currency` (default `EGP`) and the table `payment_events`. All additive; the previous release keeps working on the new schema (it ignores them).
+
+1. **Snapshot first.** Take a backup (`scripts/backup.sh`) or an RDS snapshot and note its name in `DEPLOY_BATCH.md`. Do the dry run below on a restored copy first (`scripts/restore.sh` into a scratch database).
+2. **Dry-run query** (run on the copy, then on the real database before deploying; it must return no rows):
+   ```sql
+   SELECT transaction_id, count(*) AS orders, array_agg(reference) AS refs
+   FROM orders WHERE transaction_id IS NOT NULL
+   GROUP BY transaction_id HAVING count(*) > 1;
+   ```
+   If it returns rows, the migration refuses to run (message: `migration 003 refused: duplicate orders.transaction_id values exist`), changes nothing, and the new release fails its readiness check, so `deploy.sh` switches back automatically. Resolve each duplicate by hand (decide which order the payment belongs to; clear the transaction id on the other), then deploy again.
+3. **Deploy** as usual. The migration runs once at start-up in one transaction.
+4. **Rollback of the schema** (only if needed; the code can be rolled back without it): stop the app, take a snapshot, then run `server/db/migrations-down/003_money_hardening.down.sql` with `psql -v ON_ERROR_STOP=1 --single-transaction -f ...`. It drops `payment_events` (back it up first if you want the provider payloads: `pg_dump --table=payment_events`), the `currency` column and the index, and clears the migration record. The application never runs this file by itself.
+5. `payment_events.raw_body` holds the provider's JSON, which includes the customer's billing data. Treat the table as personal data (access, backups, retention).
+
 ## 13. Scaling beyond one server
 
 1. Set `REDIS_URL` on every instance. Rate limits and group rooms are then shared.

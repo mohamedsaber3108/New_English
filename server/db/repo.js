@@ -85,7 +85,7 @@ export const sessions = {
 
 // ---------------------------------------------------------------- orders
 const ORDER_MAP = {userId: 'user_id', language: 'language', plan: 'plan', term: 'term', amount: 'amount', status: 'status', createdAt: 'created_at', paidAt: 'paid_at', expiresAt: 'expires_at',
-  paymobOrderId: 'paymob_order_id', intentionId: 'intention_id', transactionId: 'transaction_id', manualPaymentReference: 'manual_payment_reference', activatedBy: 'activated_by', refundedAt: 'refunded_at', refundedBy: 'refunded_by'};
+  paymobOrderId: 'paymob_order_id', intentionId: 'intention_id', transactionId: 'transaction_id', manualPaymentReference: 'manual_payment_reference', activatedBy: 'activated_by', refundedAt: 'refunded_at', refundedBy: 'refunded_by', currency: 'currency'};
 function toOrder(r) {
   if (!r) return null;
   const o = {reference: r.reference};
@@ -122,6 +122,15 @@ export const orders = {
 // ---------------------------------------------------------------- support tickets
 const toTicket = r => r && clean({reference: r.reference, userId: r.user_id, category: r.category, subject: r.subject, message: r.message, status: r.status, resolution: r.resolution, createdAt: iso(r.created_at), updatedAt: iso(r.updated_at), updatedBy: r.updated_by,
   ...(r.c_email !== undefined ? {customer: r.c_id ? {id: r.c_id, name: r.c_name, email: r.c_email} : null} : {})});
+// ---------------------------------------------------------------- payment events (E-6)
+export const paymentEvents = {
+  // Stores a provider event once. Returns true when it is new, false when this (provider, eventId) was already stored (a replay).
+  async record(q, {provider, eventId, orderRef = null, rawBody, signatureVerified}) {
+    const r = await q.query('INSERT INTO payment_events (provider, event_id, order_ref, raw_body, signature_verified) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (provider, event_id) DO NOTHING RETURNING id', [provider, eventId, orderRef, rawBody, !!signatureVerified]);
+    return r.rows.length > 0;
+  },
+};
+
 export const tickets = {
   async create(q, t) { await q.query('INSERT INTO support_tickets (reference, user_id, category, subject, message, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [t.reference, t.userId, t.category, t.subject, t.message, t.status, t.createdAt, t.updatedAt]); },
   async listForUser(q, userId) { return (await q.query('SELECT * FROM support_tickets WHERE user_id = $1 ORDER BY created_at DESC', [userId])).rows.map(toTicket); },
