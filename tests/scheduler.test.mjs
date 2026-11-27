@@ -100,5 +100,7 @@ const approx = (a, b, msg, tol = 1e-9) => { if (Math.abs(a - b) <= tol) console.
   eq(normalizeCard({}, T0), null, 'normalize rejects card with no word');
 }
 
+eq(1, 2, 'RED PROOF: deliberately failing assertion (do not merge)');
+
 if (failures) { console.error(`\nScheduler unit tests FAILED (${failures} assertion(s)).`); process.exit(1); }
 console.log('\nScheduler unit tests passed.');
