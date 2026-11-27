@@ -3,7 +3,7 @@
 // so every release gets its own cache and the activate step deletes the older ones. In `npm run dev` it stays as is.
 importScripts('/sw-policy.js');
 const RELEASE = '__BUILD_ID__';
-const {isCacheableRequest, isCacheableResponse, cacheName, PRECACHE} = self.SWPolicy;
+const {isCacheableRequest, isCacheableResponse, isPrecachedPath, cacheName, PRECACHE} = self.SWPolicy;
 const CACHE = cacheName(RELEASE);
 
 self.addEventListener('install', e => {
@@ -14,9 +14,17 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
-// The page posts {type: 'clear-caches'} on logout (client/src/swCache.js).
+// The page posts {type: 'clear-caches'} on sign-out (client/src/swCache.js). Everything is deleted except the install-time
+// files (offline page etc.), so the offline page still works right after sign-out.
+async function clearCaches() {
+  for (const k of await caches.keys()) {
+    if (k !== CACHE) { await caches.delete(k); continue; }
+    const c = await caches.open(k);
+    for (const r of await c.keys()) if (!isPrecachedPath(new URL(r.url).pathname)) await c.delete(r);
+  }
+}
 self.addEventListener('message', e => {
-  if (e.data && e.data.type === 'clear-caches') e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))));
+  if (e.data && e.data.type === 'clear-caches') e.waitUntil(clearCaches());
 });
 
 self.addEventListener('fetch', e => {
@@ -28,7 +36,7 @@ self.addEventListener('fetch', e => {
   }
   if (!isCacheableRequest({method: req.method, mode: req.mode, destination: req.destination, url: req.url}, self.location.origin)) return;
   e.respondWith(fetch(req).then(res => {
-    if (isCacheableResponse(res)) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+    if (isCacheableResponse(res, req.destination)) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
     return res;
   }).catch(() => caches.match(req).then(r => r || Response.error())));
 });

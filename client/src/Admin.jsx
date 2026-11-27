@@ -431,7 +431,7 @@ export default function AdminConsole() {
   const [session, setSession] = useState(undefined), [expired, setExpired] = useState(false), [tab, setTab] = useState('overview'), [pw, setPw] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { adminApi('auth/me').then(setSession).catch(() => setSession(null)); return () => { mounted.current = false; }; }, []);
-  const onAuthLost = useCallback(() => { setSession(null); setExpired(true); }, []);
+  const onAuthLost = useCallback(() => { clearSwCaches(); setSession(null); setExpired(true); }, []);
   if (session === undefined) return <section className="x-page"><div className="x-card">جاري التحقق من الجلسة…</div></section>;
   if (!session) return <SignIn expired={expired} onSignedIn={d => { setExpired(false); setSession(d); const first = TABS.find(t => d.permissions.includes(t.perm)); setTab(first?.id || 'overview'); adminApi('auth/me').then(setSession).catch(() => {}); }}/>;
   const perms = session.permissions || [];

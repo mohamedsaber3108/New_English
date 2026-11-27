@@ -1,6 +1,6 @@
 // Service worker cache policy (U-5): decisions are pure functions in client/public/sw-policy.js, so no browser is needed.
 // Also checks the static pieces: sw.js wiring, the bilingual offline page, and that logout code clears caches.
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  PASS:', m); else { console.error('  FAIL:', m); failures++; } };
@@ -43,6 +43,15 @@ ok(!P.isCacheableResponse(res({}, {status: 206})), 'partial content is not cache
 ok(!P.isCacheableResponse(res({}, {type: 'opaque'})), 'opaque response is not cached');
 ok(!P.isCacheableResponse(null), 'missing response is not cached');
 
+// HTML answered to an asset request is the app shell or an error page, not an asset
+for (const d of ['script', 'style', 'font', 'image']) ok(!P.isCacheableResponse(res({'content-type': 'text/html; charset=utf-8'}), d), `text/html answer to a ${d} request is not cached`);
+ok(P.isCacheableResponse(res({'content-type': 'text/javascript'}), 'script'), 'a real script response is cacheable');
+ok(P.isCacheableResponse(res({'content-type': 'text/html'}), ''), 'the content-type rule applies to asset destinations only (offline.html has none)');
+
+// ---- sign-out keeps the install-time files ----
+for (const p of P.PRECACHE) ok(P.isPrecachedPath(p), `${p} survives sign-out`);
+ok(!P.isPrecachedPath('/assets/index-abc.js') && !P.isPrecachedPath('/'), 'everything else is removed on sign-out');
+
 // ---- versioning ----
 ok(P.cacheName('abc') === 'usam-language-abc' && P.cacheName('abd') !== P.cacheName('abc'), 'cache name changes with the release id');
 ok(P.PRECACHE.includes('/offline.html'), 'offline page is precached at install');
@@ -57,9 +66,26 @@ const off = await readFile(new URL('../client/public/offline.html', import.meta.
 ok(/[\u0600-\u06FF]/.test(off) && /You are offline/.test(off), 'offline page has Arabic and English text');
 ok(/lang="ar"[^>]*dir="rtl"/.test(off) && /lang="en"[^>]*dir="ltr"/.test(off), 'offline page sets language and direction per section');
 ok(!/<script(?![^>]*\bsrc=)/.test(off), 'offline page has no inline script (CSP script-src self)');
-for (const f of ['Admin.jsx', 'Customer.jsx']) {
+ok(/isPrecachedPath\(new URL\(r\.url\)\.pathname\)/.test(sw), 'sw.js keeps the precached files when clearing');
+const bundle = await readdir(new URL('../client/src/', import.meta.url));
+// Every file with a sign-out path must call clearSwCaches() once per path. Sign-out paths: admin logout, admin
+// session lost (onAuthLost), learner logout, learner account deletion.
+const TRIGGER = /auth\/logout|customerApi\('logout'|customerApi\('account','DELETE'|const onAuthLost =/g;
+const EXPECT = {'Admin.jsx': 2, 'Customer.jsx': 2};
+for (const f of bundle.filter(n => /\.jsx?$/.test(n) && n !== 'swCache.js')) {
   const src = await readFile(new URL('../client/src/' + f, import.meta.url), 'utf8');
-  ok(/clearSwCaches\(\)/.test(src), `${f} clears service-worker caches on sign-out`);
+  const triggers = (src.match(TRIGGER) || []).length, calls = (src.match(/clearSwCaches\(\)/g) || []).length;
+  ok(triggers === (EXPECT[f] ?? 0), `${f}: ${triggers} sign-out path(s) found (expected ${EXPECT[f] ?? 0})`);
+  ok(calls === triggers, `${f}: clearSwCaches() called ${calls} time(s) for ${triggers} sign-out path(s)`);
+}
+ok(/const onAuthLost = useCallback\(\(\) => \{ clearSwCaches\(\)/.test(await readFile(new URL('../client/src/Admin.jsx', import.meta.url), 'utf8')), 'Admin onAuthLost clears caches');
+
+// ---- build output (dist/ is built by `pretest` when missing) ----
+const dist = await readFile(new URL('../dist/sw.js', import.meta.url), 'utf8').catch(() => null);
+ok(dist !== null, 'dist/sw.js exists after the build');
+if (dist !== null) {
+  ok(!dist.includes('__BUILD_ID__'), 'dist/sw.js has no __BUILD_ID__ placeholder left');
+  ok(/const RELEASE = '[A-Za-z0-9._-]+';/.test(dist), 'dist/sw.js carries a concrete release id');
 }
 
 if (failures) { console.error(`\nService worker policy tests FAILED (${failures}).`); process.exit(1); }
