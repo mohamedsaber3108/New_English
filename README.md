@@ -24,6 +24,8 @@ npm run build:app    # production build into dist/
 npm run test:e2e     # browser journeys (needs build:app and a local Chrome)
 ```
 
+Service worker (`client/public/sw.js`, rules in `client/public/sw-policy.js`): caches public static files only (never pages, `/api`, `/admin`, customer or account paths, or responses with `Set-Cookie`, `no-store` or `private`). Each build gets its own cache name from `RELEASE_ID` (for example the git sha; the build time is used when it is not set), and older caches are deleted on activation. Sign-out clears all caches. Offline page: `client/public/offline.html` (Arabic and English).
+
 `npm run dev` starts a static preview that uses the in-browser preview API. It is never deployed.
 
 Tests run on embedded PGlite by default. Set `DATABASE_URL` (and `REDIS_URL`) to run the same suites against PostgreSQL and Redis.

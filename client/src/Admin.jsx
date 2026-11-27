@@ -4,6 +4,7 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Activity, BadgeCheck, ClipboardList, FileClock, Inbox, KeyRound, LayoutDashboard, LifeBuoy, LogOut, RefreshCw, Search, ShieldCheck, ShoppingCart, UserCog, Users} from 'lucide-react';
 import './admin.css';
+import {clearSwCaches} from './swCache.js';
 
 class ApiError extends Error { constructor(message, status, data = {}) { super(message); this.status = status; this.data = data; } }
 async function adminApi(path, {method = 'GET', body} = {}) {
@@ -230,7 +231,7 @@ function OrdersScreen({perms, onAuthLost}) {
       </Toolbar>
       <ListState list={list}/>
       {list.data && <><Table rowKey={r => r.reference} selected={sel} onRow={r => { setSel(r.reference); act.setMsg({kind: '', text: ''}); }} rows={list.data.items} columns={[
-        {key: 'reference', label: 'المرجع', ltr: true}, {key: 'customer', label: 'العميل', render: r => r.customer?.email || 'حساب محذوف', ltr: true},
+        {key: 'reference', label: 'المرجع', ltr: true}, {key: 'customer', label: 'العميل', render: r => r.customer?.email || <span lang="ar" dir="rtl">حساب محذوف</span>, ltr: true},
         {key: 'plan', label: 'الباقة', render: r => `${r.plan === 'plus' ? 'بلاس' : 'أساسي'} · ${r.term === 'yearly' ? 'سنوي' : 'شهري'}`},
         {key: 'amount', label: 'المبلغ', render: r => `${r.amount} جنيه`}, {key: 'status', label: 'الحالة', render: r => <Badge tone={r.status === 'paid' ? 'good' : r.status === 'refunded' || r.status === 'failed' ? 'bad' : 'warn'}>{ORDER_STATUS[r.status] || r.status}</Badge>},
         {key: 'createdAt', label: 'التاريخ', render: r => fmtDay(r.createdAt)}]}/><Pager data={list.data} onPage={list.setPage}/></>}
@@ -268,7 +269,7 @@ function SupportScreen({perms, onAuthLost}) {
     </div>
     <aside className="x-card ad-detail" aria-live="polite">
       {!t ? <p>اختر تذكرة لعرضها.</p> : <>
-        <h2>{t.subject}</h2><p lang="en" dir="ltr" className="ad-ltr">{t.reference} · {t.customer?.email || 'حساب محذوف'}</p>
+        <h2>{t.subject}</h2><p lang="en" dir="ltr" className="ad-ltr">{t.reference} · {t.customer?.email || <span lang="ar" dir="rtl">حساب محذوف</span>}</p>
         <div className="ad-message">{t.message}</div>
         <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
         {perms.includes('support.write') ? <form className="ad-reason" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('support/' + t.reference, {method: 'PATCH', body: edit}), 'تم تحديث التذكرة. يراها العميل في مركز المساعدة.'); if (r) list.reload(); }}>
@@ -430,13 +431,13 @@ export default function AdminConsole() {
   const [session, setSession] = useState(undefined), [expired, setExpired] = useState(false), [tab, setTab] = useState('overview'), [pw, setPw] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { adminApi('auth/me').then(setSession).catch(() => setSession(null)); return () => { mounted.current = false; }; }, []);
-  const onAuthLost = useCallback(() => { setSession(null); setExpired(true); }, []);
+  const onAuthLost = useCallback(() => { clearSwCaches(); setSession(null); setExpired(true); }, []);
   if (session === undefined) return <section className="x-page"><div className="x-card">جاري التحقق من الجلسة…</div></section>;
   if (!session) return <SignIn expired={expired} onSignedIn={d => { setExpired(false); setSession(d); const first = TABS.find(t => d.permissions.includes(t.perm)); setTab(first?.id || 'overview'); adminApi('auth/me').then(setSession).catch(() => {}); }}/>;
   const perms = session.permissions || [];
   const tabs = TABS.filter(t => perms.includes(t.perm));
   const current = tabs.find(t => t.id === tab) ? tab : tabs[0]?.id;
-  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} setSession(null); setExpired(false); };
+  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} clearSwCaches(); setSession(null); setExpired(false); };
   const refresh = () => adminApi('auth/me').then(setSession).catch(onAuthLost);
   const props = {perms, onAuthLost, me: session.admin};
   const security = <><MfaPanel session={session} onAuthLost={onAuthLost} onChanged={refresh}/><PasswordPanel onAuthLost={onAuthLost}/></>;
