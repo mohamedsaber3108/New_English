@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {randomBytes} from 'node:crypto';
 import {freePort, stopServer} from './helpers.mjs';
 import {adminRouter, ROLES, PERMISSIONS, can} from '../server/admin.js';
 
@@ -69,9 +70,10 @@ ok(Object.keys(PERMISSIONS).every(p => used.has(p)), `all ${Object.keys(PERMISSI
 ok(Object.values(TABLE).every(v => v === 'public' || v === 'session' || v in PERMISSIONS), 'every table value is a known permission, session or public');
 
 // ---- 2. real server ----
-const PW = 'correct-horse-battery-staple', RUN = 'rp' + Date.now();
+const rnd = () => randomBytes(32).toString('hex'); // keys and passwords are generated per run, never literals (secret scan)
+const PW = rnd(), RUN = 'rp' + Date.now();
 const dir = await mkdtemp(join(tmpdir(), 'usam-rp-'));
-const env = {...process.env, NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '100000', API_RATE_LIMIT_PER_MIN: '100000', AUDIT_HMAC_KEY: 'rp-audit-key-0123456789', ADMIN_MFA_KEY: 'rp-mfa-key-0123456789abcdef', LEADS_FILE: join(dir, 'none.jsonl'), CUSTOMER_DB_FILE: join(dir, 'db.json')};
+const env = {...process.env, NODE_ENV: 'test', RATE_LIMIT_PREFIX: RUN, AUTH_IP_LIMIT: '100000', API_RATE_LIMIT_PER_MIN: '100000', AUDIT_HMAC_KEY: rnd(), ADMIN_MFA_KEY: rnd(), LEADS_FILE: join(dir, 'none.jsonl'), CUSTOMER_DB_FILE: join(dir, 'db.json')};
 let child, isolatedDb = null, pgAdmin = null;
 if (process.env.DATABASE_URL) {
   // dedicated throw-away database, as admin.test.mjs does
