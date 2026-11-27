@@ -29,6 +29,10 @@ const TABLE = {
   'POST /admin/mfa/disable': 'session',
   'GET /admin/auth/me': 'session',
   'POST /admin/auth/password': 'session',
+  'POST /admin/auth/step-up': 'session',
+  'GET /admin/approvals': 'session',
+  'POST /admin/approvals/:id/approve': 'session',
+  'POST /admin/approvals/:id/reject': 'session',
   'GET /admin/overview': 'dashboard.read',
   'GET /admin/users': 'users.read',
   'GET /admin/users/:id': 'users.read',
@@ -103,7 +107,8 @@ try {
   const sessions = {owner: await login(ownerEmail)};
   for (const role of Object.keys(ROLES)) {
     if (role === 'owner') continue;
-    const r = await call(o, 'POST', '/admin/admins', sessions.owner, {email: `${role}-${RUN}@example.com`, name: role + ' person', role, password: PW});
+    await call(o, 'POST', '/admin/auth/step-up', sessions.owner, {password: PW});
+    const r = await call(o, 'POST', '/admin/admins', sessions.owner, {email: `${role}-${RUN}@example.com`, name: role + ' person', role, password: PW, reason: 'route test account'});
     ok(r.status === 201, `${role} account created`);
     sessions[role] = await login(`${role}-${RUN}@example.com`);
   }

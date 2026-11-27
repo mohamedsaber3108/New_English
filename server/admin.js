@@ -79,6 +79,18 @@ const paging = req => ({page: req.query.page, pageSize: req.query.pageSize});
 const reasonOf = req => { const r = clean(req.body?.reason, 500); if (r.length < 5) throw Object.assign(Error('A reason of at least 5 characters is required for this action.'), {status: 400}); return r; };
 const httpError = (status, error) => Object.assign(Error(error), {status});
 
+// ---- Step-up and second approver (A-1) ----
+// A sensitive route needs a password re-entered within STEP_UP_MS (stored as step_up_at on the admin session).
+// Refunds and administrator role/status changes also need a second administrator to approve the stored request.
+const stepUpMs = () => Number(process.env.ADMIN_STEP_UP_MS || 5 * 60 * 1000); // env only so tests can make it expire fast
+const STEP_UP_ATTEMPTS = 5, APPROVAL_TTL_MS = 24 * 3600 * 1000;
+export const STEP_UP_MESSAGE = 'Please re-enter your password to continue with this sensitive action.';
+const APPROVAL_PERM = {refund: 'orders.write', admin_update: 'admins.write'};
+const stepUp = (req, res, next) => {
+  if (req.adminSession?.stepUpAt > Date.now() - stepUpMs()) return next();
+  res.status(403).json({error: STEP_UP_MESSAGE, stepUp: true});
+};
+
 export function adminRouter(customer, {leadsFile, integrations = () => ({}), configFindings = () => []} = {}) {
   const router = express.Router();
   const {repo} = customer;
@@ -293,6 +305,29 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     } catch (e) { fail(res, e); }
   });
 
+  // Re-enter the password to unlock sensitive actions for STEP_UP_MS. Wrong passwords count on the session;
+  // after STEP_UP_ATTEMPTS the session is ended and the administrator must sign in again.
+  router.post('/admin/auth/step-up', customer.throttle, requireAdmin(null), async (req, res) => {
+    try {
+      const password = String(req.body?.password || '');
+      if (!password) return res.status(400).json({error: 'Enter your password.'});
+      const out = await (await db()).tx(async q => {
+        const ok = await checkPassword(password, req.admin.password);
+        if (ok) {
+          await repo.adminSessions.setStepUp(q, req.adminSession.id, Date.now());
+          await audit(q, {event: 'admin_step_up', actor: actorOf(req)});
+          return {status: 200};
+        }
+        const attempts = (req.adminSession.attempts || 0) + 1, exhausted = attempts >= STEP_UP_ATTEMPTS;
+        if (exhausted) await repo.adminSessions.remove(q, req.adminSession.id); else await repo.adminSessions.setAttempts(q, req.adminSession.id, attempts);
+        await audit(q, {event: 'admin_step_up_failed', actor: actorOf(req), meta: {attempt: attempts, exhausted}});
+        return {status: exhausted ? 401 : 403, error: exhausted ? 'Too many incorrect passwords. Sign in again.' : 'Password is incorrect.'};
+      });
+      if (out.status !== 200) return res.status(out.status).json({error: out.error});
+      res.json({ok: true, validForMs: stepUpMs(), expiresAt: Date.now() + stepUpMs()});
+    } catch (e) { fail(res, e); }
+  });
+
   // ---------------- Overview ----------------
   router.get('/admin/overview', requireAdmin('dashboard.read'), async (_req, res) => {
     try { res.json({...await repo.overview(await db()), integrations: integrations(), configWarnings: configFindings()}); } catch (e) { fail(res, e); }
@@ -326,7 +361,7 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     } catch (e) { fail(res, e); }
   });
   // Shared shape for "act on one learner inside a transaction, audit it, return the updated row".
-  const userAction = (perm, fn) => [requireAdmin(perm), async (req, res) => {
+  const userAction = (perm, fn, {sensitive = false} = {}) => [requireAdmin(perm), ...(sensitive ? [stepUp] : []), async (req, res) => {
     try {
       const out = await (await db()).tx(async q => {
         const u = await repo.users.lockById(q, req.params.id);
@@ -361,12 +396,12 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
     const expiresAt = start + days * 86400000;
     await repo.entitlements.set(q, u.id, 'English', {plan, expiresAt, source: 'manual', grantedBy: req.admin.id, grantedAt: nowIso()});
     await audit(q, {event: 'entitlement_granted', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {language: 'English', plan, days, expiresAt, reason}});
-  }));
+  }, {sensitive: true}));
   router.delete('/admin/users/:id/entitlements/English', ...userAction('orders.write', async (q, u, req) => {
     const reason = reasonOf(req), had = await repo.entitlements.remove(q, u.id, 'English');
     await audit(q, {event: 'entitlement_revoked', actor: actorOf(req), target: {type: 'user', id: u.id}, meta: {language: 'English', existed: had, reason}});
     return {revoked: had};
-  }));
+  }, {sensitive: true}));
 
   // ---------------- Orders ----------------
   router.get('/admin/orders', requireAdmin('orders.read'), async (req, res) => {
@@ -401,20 +436,89 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
   });
   // Records a refund decision and removes the access it paid for. The money itself is returned through the
   // payment provider's merchant dashboard; this endpoint does NOT move money.
-  router.post('/admin/orders/:reference/refund', requireAdmin('orders.write'), async (req, res) => {
+  // Needs step-up and a second administrator: this only stores a pending request (202). The refund is recorded
+  // when a different administrator with orders.write approves it (POST /admin/approvals/:id/approve).
+  router.post('/admin/orders/:reference/refund', requireAdmin('orders.write'), stepUp, async (req, res) => {
+    try {
+      const reason = reasonOf(req);
+      const approval = await requestApproval(req, {kind: 'refund', target: req.params.reference, reason, check: async q => {
+        const o = await repo.orders.byRef(q, req.params.reference);
+        if (!o) throw httpError(404, 'Order not found.');
+        if (o.status !== 'paid') throw httpError(409, `Only paid orders can be marked refunded (this one is ${o.status}).`);
+        return {amount: o.amount};
+      }});
+      res.status(202).json({pending: true, approval, message: 'Refund request saved. A different administrator must approve it before it takes effect.'});
+    } catch (e) { fail(res, e); }
+  });
+  async function applyRefund(q, reference, {approver, ap}) {
+    const o = await repo.orders.byRef(q, reference, {lock: true});
+    if (!o) throw httpError(404, 'Order not found.');
+    if (o.status !== 'paid') throw httpError(409, `Only paid orders can be marked refunded (this one is ${o.status}).`);
+    const revoked = o.userId ? await repo.entitlements.removeIfOrder(q, o.userId, o.language, o.reference) : false;
+    const patch = {status: 'refunded', refundedAt: nowIso(), refundedBy: approver.id};
+    await repo.orders.update(q, o.reference, patch);
+    await audit(q, {event: 'order_refund_recorded', actor: {type: 'admin', id: approver.id, role: approver.role}, target: {type: 'order', id: o.reference}, meta: {userId: o.userId, amount: o.amount, entitlementRevoked: revoked, reason: ap.reason, requestedBy: ap.requestedBy, approvedBy: approver.id, approvalId: ap.id}});
+    return {order: {...o, ...patch}, entitlementRevoked: revoked, notice: 'Refund recorded. Return the money in the payment provider dashboard; this action does not move funds.'};
+  }
+
+  // Stores a pending request and audits it. `check` validates the target inside the same transaction.
+  async function requestApproval(req, {kind, target, reason, payload = {}, check}) {
+    const ap = {id: randomUUID(), kind, target, payload, reason, requestedBy: req.admin.id, requestedAt: Date.now()};
+    try {
+      await (await db()).tx(async q => {
+        const info = await check(q);
+        await repo.approvals.create(q, ap);
+        await audit(q, {event: 'approval_requested', actor: actorOf(req), target: {type: kind === 'refund' ? 'order' : 'admin', id: target}, meta: {kind, approvalId: ap.id, reason, ...info, ...payload}});
+      });
+    } catch (e) { if (isUniqueViolation(e)) throw httpError(409, 'A request for this item is already waiting for approval.'); throw e; }
+    return {id: ap.id, kind, target, status: 'pending', requestedAt: ap.requestedAt};
+  }
+
+  // ---------------- Second-approver requests ----------------
+  const approvalKinds = role => Object.keys(APPROVAL_PERM).filter(k => can(role, APPROVAL_PERM[k]));
+  router.get('/admin/approvals', requireAdmin(null), async (req, res) => {
+    try {
+      const d = await db(), status = clean(req.query.status, 20) || 'pending';
+      const items = await repo.approvals.list(d, {status: status === 'all' ? '' : status, kinds: approvalKinds(req.admin.role)});
+      const emails = await repo.admins.emailsById(d, [...new Set(items.flatMap(i => [i.requestedBy, i.decidedBy].filter(Boolean)))]);
+      res.json({items: items.map(i => ({...i, requestedByLabel: emails.get(i.requestedBy) || 'deleted admin', decidedByLabel: i.decidedBy ? emails.get(i.decidedBy) || 'deleted admin' : null, mine: i.requestedBy === req.admin.id, expiresAt: i.requestedAt + APPROVAL_TTL_MS}))});
+    } catch (e) { fail(res, e); }
+  });
+  router.post('/admin/approvals/:id/approve', requireAdmin(null), stepUp, async (req, res) => {
     try {
       const reason = reasonOf(req);
       const out = await (await db()).tx(async q => {
-        const o = await repo.orders.byRef(q, req.params.reference, {lock: true});
-        if (!o) throw httpError(404, 'Order not found.');
-        if (o.status !== 'paid') throw httpError(409, `Only paid orders can be marked refunded (this one is ${o.status}).`);
-        const revoked = o.userId ? await repo.entitlements.removeIfOrder(q, o.userId, o.language, o.reference) : false;
-        const patch = {status: 'refunded', refundedAt: nowIso(), refundedBy: req.admin.id};
-        await repo.orders.update(q, o.reference, patch);
-        await audit(q, {event: 'order_refund_recorded', actor: actorOf(req), target: {type: 'order', id: o.reference}, meta: {userId: o.userId, amount: o.amount, entitlementRevoked: revoked, reason}});
-        return {order: {...o, ...patch}, entitlementRevoked: revoked};
+        const ap = await repo.approvals.byId(q, req.params.id, {lock: true});
+        if (!ap) throw httpError(404, 'Request not found.');
+        if (ap.status !== 'pending') throw httpError(409, `This request was already ${ap.status}.`);
+        if (ap.requestedBy === req.admin.id) throw httpError(403, 'You cannot approve your own request. Ask a different administrator.');
+        if (!can(req.admin.role, APPROVAL_PERM[ap.kind])) throw httpError(403, DENIED_MESSAGE);
+        if (ap.requestedAt + APPROVAL_TTL_MS < Date.now()) {
+          await repo.approvals.decide(q, ap.id, {status: 'expired', decidedBy: req.admin.id, decidedAt: Date.now()});
+          return {status: 409, error: 'This request expired. Ask for it again.'};
+        }
+        const result = ap.kind === 'refund' ? await applyRefund(q, ap.target, {approver: req.admin, ap}) : await applyAdminUpdate(q, ap.target, ap.payload, {approver: req.admin, ap});
+        await repo.approvals.decide(q, ap.id, {status: 'approved', decidedBy: req.admin.id, decidedAt: Date.now(), decisionReason: reason});
+        await audit(q, {event: 'approval_approved', actor: actorOf(req), target: {type: ap.kind === 'refund' ? 'order' : 'admin', id: ap.target}, meta: {kind: ap.kind, approvalId: ap.id, requestedBy: ap.requestedBy, reason}});
+        return {status: 200, result};
       });
-      res.json({...out, notice: 'Refund recorded. Return the money in the payment provider dashboard; this action does not move funds.'});
+      if (out.status !== 200) return res.status(out.status).json({error: out.error});
+      res.json({approved: true, ...out.result});
+    } catch (e) { fail(res, e); }
+  });
+  // The requester (to withdraw) or any administrator who could approve it may reject. No step-up: it changes nothing.
+  router.post('/admin/approvals/:id/reject', requireAdmin(null), async (req, res) => {
+    try {
+      const reason = clean(req.body?.reason, 500) || null;
+      await (await db()).tx(async q => {
+        const ap = await repo.approvals.byId(q, req.params.id, {lock: true});
+        if (!ap) throw httpError(404, 'Request not found.');
+        if (ap.status !== 'pending') throw httpError(409, `This request was already ${ap.status}.`);
+        if (ap.requestedBy !== req.admin.id && !can(req.admin.role, APPROVAL_PERM[ap.kind])) throw httpError(403, DENIED_MESSAGE);
+        await repo.approvals.decide(q, ap.id, {status: 'rejected', decidedBy: req.admin.id, decidedAt: Date.now(), decisionReason: reason});
+        await audit(q, {event: 'approval_rejected', actor: actorOf(req), target: {type: ap.kind === 'refund' ? 'order' : 'admin', id: ap.target}, meta: {kind: ap.kind, approvalId: ap.id, requestedBy: ap.requestedBy, reason}});
+      });
+      res.json({rejected: true});
     } catch (e) { fail(res, e); }
   });
 
@@ -502,19 +606,19 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
   router.get('/admin/admins', requireAdmin('admins.read'), async (req, res) => {
     try { const r = await repo.admins.list(await db(), {needle: needle(req), ...paging(req)}); res.json({...r, items: r.items.map(publicAdmin)}); } catch (e) { fail(res, e); }
   });
-  router.post('/admin/admins', requireAdmin('admins.write'), async (req, res) => {
+  router.post('/admin/admins', requireAdmin('admins.write'), stepUp, async (req, res) => {
     try {
-      const role = clean(req.body?.role, 20);
+      const reason = reasonOf(req), role = clean(req.body?.role, 20);
       if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can create another owner.'});
       const a = await buildAdmin({email: req.body?.email, name: req.body?.name, role, password: String(req.body?.password || ''), createdBy: req.admin.id});
       try {
-        await (await db()).tx(async q => { await repo.admins.create(q, a); await audit(q, {event: 'admin_created', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {role}}); });
+        await (await db()).tx(async q => { await repo.admins.create(q, a); await audit(q, {event: 'admin_created', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {role, reason}}); });
       } catch (e) { if (isUniqueViolation(e)) return res.status(409).json({error: 'An administrator with this email already exists.'}); throw e; }
       res.status(201).json({admin: publicAdmin(a)});
     } catch (e) { fail(res, e); }
   });
   // Lost authenticator: an owner/admins.write holder resets another admin's MFA (they re-enroll at next sign-in).
-  router.post('/admin/admins/:id/mfa/reset', requireAdmin('admins.write'), async (req, res) => {
+  router.post('/admin/admins/:id/mfa/reset', requireAdmin('admins.write'), stepUp, async (req, res) => {
     try {
       const reason = reasonOf(req);
       if (req.params.id === req.admin.id) return res.status(409).json({error: 'Use your own security settings to change your two-factor authentication.'});
@@ -529,29 +633,39 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
       res.json({admin});
     } catch (e) { fail(res, e); }
   });
-  router.patch('/admin/admins/:id', requireAdmin('admins.write'), async (req, res) => {
+  // Role or status change: step-up, a reason, and a second administrator's approval (202 = pending).
+  router.patch('/admin/admins/:id', requireAdmin('admins.write'), stepUp, async (req, res) => {
     try {
+      const reason = reasonOf(req);
       const role = req.body?.role === undefined ? undefined : clean(req.body.role, 20);
       const status = req.body?.status === undefined ? undefined : clean(req.body.status, 20);
       if (req.params.id === req.admin.id) return res.status(409).json({error: 'You cannot change your own role or status.'});
       if (role !== undefined && !ROLES[role]) return res.status(400).json({error: 'Unknown role.'});
       if (status !== undefined && !['active', 'disabled'].includes(status)) return res.status(400).json({error: 'Status must be active or disabled.'});
       if (role === 'owner' && req.admin.role !== 'owner') return res.status(403).json({error: 'Only an owner can grant the owner role.'});
-      const admin = await (await db()).tx(async q => {
-        const a = await repo.admins.byId(q, req.params.id, {lock: true});
+      if (role === undefined && status === undefined) return res.status(400).json({error: 'Choose a role or a status to change.'});
+      const approval = await requestApproval(req, {kind: 'admin_update', target: req.params.id, reason, payload: {...(role !== undefined && {role}), ...(status !== undefined && {status})}, check: async q => {
+        const a = await repo.admins.byId(q, req.params.id);
         if (!a) throw httpError(404, 'Administrator not found.');
-        const next = {role: role ?? a.role, status: status ?? a.status};
-        const ownersAfter = await repo.admins.activeOwnersExcept(q, a.id) + (next.role === 'owner' && next.status === 'active' ? 1 : 0);
-        if (ownersAfter === 0) throw httpError(409, 'At least one active owner must remain.');
-        const before = {role: a.role, status: a.status};
-        await repo.admins.update(q, a.id, next);
-        if (next.status === 'disabled' || next.role !== before.role) await repo.adminSessions.removeForAdmin(q, a.id);
-        await audit(q, {event: 'admin_updated', actor: actorOf(req), target: {type: 'admin', id: a.id}, meta: {before, after: next}});
-        return publicAdmin({...a, ...next});
-      });
-      res.json({admin});
+        return {before: {role: a.role, status: a.status}};
+      }});
+      res.status(202).json({pending: true, approval, message: 'Change saved as a request. A different administrator must approve it before it takes effect.'});
     } catch (e) { fail(res, e); }
   });
+  async function applyAdminUpdate(q, id, {role, status}, {approver, ap}) {
+    const a = await repo.admins.byId(q, id, {lock: true});
+    if (!a) throw httpError(404, 'Administrator not found.');
+    if (id === ap.requestedBy) throw httpError(409, 'You cannot change your own role or status.');
+    if (role === 'owner' && approver.role !== 'owner') throw httpError(403, 'Only an owner can grant the owner role.');
+    const next = {role: role ?? a.role, status: status ?? a.status};
+    const ownersAfter = await repo.admins.activeOwnersExcept(q, a.id) + (next.role === 'owner' && next.status === 'active' ? 1 : 0);
+    if (ownersAfter === 0) throw httpError(409, 'At least one active owner must remain.');
+    const before = {role: a.role, status: a.status};
+    await repo.admins.update(q, a.id, next);
+    if (next.status === 'disabled' || next.role !== before.role) await repo.adminSessions.removeForAdmin(q, a.id);
+    await audit(q, {event: 'admin_updated', actor: {type: 'admin', id: approver.id, role: approver.role}, target: {type: 'admin', id: a.id}, meta: {before, after: next, reason: ap.reason, requestedBy: ap.requestedBy, approvedBy: approver.id, approvalId: ap.id}});
+    return {admin: publicAdmin({...a, ...next})};
+  }
 
   return router;
 }
