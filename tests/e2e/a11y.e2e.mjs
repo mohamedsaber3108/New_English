@@ -24,10 +24,19 @@ try { await access('dist/index.html'); } catch { console.error('a11y.e2e: dist/ 
 let axePath;
 try { axePath = createRequire(import.meta.url).resolve('axe-core/axe.min.js'); } catch { console.error('a11y.e2e: axe-core is not installed — run `npm ci`.'); process.exit(1); }
 
-// route -> what the page is called in the report and the language it must be in
+// [route, name in the report, language the page must be in, what proves THIS route has rendered]
+// Marketing pages set their own document title (the same strings after the U-1 change); workspace pages are recognised by
+// a class that only they have; the admin page also needs its sign-in form (the admin code loads lazily).
 const PAGES = [
-  ['landing', 'landing', 'ar'], ['pricing', 'pricing', 'ar'], ['method', 'method', 'ar'], ['groups', 'groups', 'ar'],
-  ['contact', 'contact', 'ar'], ['account', 'account', 'ar'], ['coach', 'coach', 'en'], ['admin', 'admin-signin', 'ar'],
+  ['landing', 'landing', 'ar', {title: 'USAM Language | لغة تعيشها'}],
+  ['pricing', 'pricing', 'ar', {title: 'الأسعار | USAM Language'}],
+  ['method', 'method', 'ar', {title: 'طريقة التعلّم | USAM Language'}],
+  ['groups', 'groups', 'ar', {title: 'المجموعات | USAM Language'}],
+  ['contact', 'contact', 'ar', {title: 'تواصل معنا | USAM Language'}],
+  ['account', 'account', 'ar', {title: 'حسابي | USAM Language'}],
+  ['home', 'home-dashboard', 'en', {selector: '.page.dashboard'}],
+  ['coach', 'coach', 'en', {selector: '.coach-layout'}],
+  ['admin', 'admin-signin', 'ar', {title: 'التشغيل | USAM Language', selector: 'input[type=password]'}],
 ];
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
@@ -42,14 +51,18 @@ try {
   browser = await chromium.launch({executablePath: exe, headless: true});
   // bypassCSP: the app's CSP (script-src 'self') would block the injected axe script; the CSP itself is tested elsewhere.
   const ctx = await browser.newContext({viewport: {width: 1280, height: 800}, bypassCSP: true, reducedMotion: 'reduce'});
-  await ctx.addInitScript(() => { try { localStorage.setItem('usam.language.consent', JSON.stringify({necessary: true, analytics: false})); } catch {} });
+  // consent accepted, and the learner profile marked "placement done" so the onboarding overlay does not cover the workspace
+  // screens (the coach and the dashboard are scanned themselves, not the overlay)
+  await ctx.addInitScript(() => { try { localStorage.setItem('usam.language.consent', JSON.stringify({necessary: true, analytics: false})); localStorage.setItem('usam.language.profile', JSON.stringify({name: 'Axe Tester', level: 'A2', assessmentDone: true})); } catch {} });
   const page = await ctx.newPage();
-  let total = {critical: 0, serious: 0, moderate: 0, minor: 0};
-  for (const [route, name, lang] of PAGES) {
+  let total = {critical: 0, serious: 0, moderate: 0, minor: 0}, sawSendButton = false;
+  for (const [route, name, lang, ready] of PAGES) {
     await page.goto(o + '/#' + route);
-    await page.waitForFunction(() => document.querySelector('#root h1, #root h2'), null, {timeout: 20000});
-    await sleep(900); // let the page finish rendering (lazy admin chunk, fonts)
+    // wait for THIS route to have rendered (no fixed sleep), then for fonts and one animation frame
+    await page.waitForFunction(({title, selector}) => (!title || document.title === title) && (!selector || !!document.querySelector(selector)), ready, {timeout: 20000});
+    await page.evaluate(() => document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))));
     ok(await page.evaluate(() => document.documentElement.lang) === lang, `${name}: page language is ${lang}`);
+    if (route === 'coach') sawSendButton = await page.evaluate(() => !!document.querySelector('.send-button[aria-label="Send message"]') && !document.querySelector('.onboard-card'));
     if (!await page.evaluate(() => typeof window.axe === 'object')) await page.addScriptTag({path: axePath});
     const found = await page.evaluate(tags => window.axe.run(document, {runOnly: {type: 'tag', values: tags}, resultTypes: ['violations']}).then(r => r.violations.map(v => ({id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.length, first: (v.nodes[0]?.target || []).join(' ').slice(0, 120)}))), TAGS);
     const count = impact => found.filter(v => v.impact === impact).length;
@@ -60,6 +73,8 @@ try {
     ok(c.critical === 0, `${name}: no critical accessibility violation${c.critical ? ' - ' + found.filter(v => v.impact === 'critical').map(v => v.id).join(', ') : ''}`);
   }
   console.log(`a11y baseline: TOTAL critical=${total.critical} serious=${total.serious} moderate=${total.moderate} minor=${total.minor} on ${PAGES.length} pages`);
+  // the coach scan must have looked at the coach screen itself (with its send button), not at the onboarding overlay
+  ok(PAGES.some(p => p[1] === 'coach') && sawSendButton, 'the coach screen was scanned with its send button present (no onboarding overlay on top)');
 } catch (e) { console.error('  FAIL: unexpected error', e); failures++; }
 finally {
   if (browser) await browser.close();
