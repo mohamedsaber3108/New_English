@@ -19,7 +19,7 @@ React (Vite) and Node (Express) application for the USAM Language paid English l
 ```bash
 npm ci
 npm run check        # dependency declarations + syntax of every server module
-npm test             # API, data layer, admin, learning, AI (fake provider), rooms, backup drill
+npm test             # API, data layer, admin, learning, AI (fake provider), rooms, backup drill (builds dist/ first if it is missing)
 npm run build:app    # production build into dist/
 npm run test:e2e     # browser journeys (needs build:app and a local Chrome)
 ```

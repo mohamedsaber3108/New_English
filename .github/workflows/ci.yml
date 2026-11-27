@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: check, build, test, audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 20.18.1
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build:app
+      - run: npm test
+      - run: npm audit --omit=dev
+
+  secret-scan:
+    name: secret scan (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      # Blocking: any finding fails the job. Free for personal-account repos; an organisation repo needs a gitleaks licence key.
+      - uses: gitleaks/gitleaks-action@v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  postgres-redis:
+    name: suites on Postgres 16 + Redis 7
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: usam
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: usam_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U usam -d usam_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://usam:ci-only-password@127.0.0.1:5432/usam_ci
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 20.18.1
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  e2e:
+    name: browser e2e (Chrome)
+    needs: [verify, secret-scan, postgres-redis]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 20.18.1
+          cache: npm
+      - run: npm ci
+      # The e2e scripts skip (exit 0) when Chrome is missing; fail here instead so a skip cannot look green.
+      - run: test -x "$CHROME_PATH"
+      - run: npm run build:app
+      - run: npm run test:e2e
+      # TODO(E-1 follow-up): axe-core on the 8 main pages in Arabic and English (0 critical). Needs a new dev dependency and a new
+      # test file, so it is not faked here.
