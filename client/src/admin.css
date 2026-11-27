@@ -93,3 +93,5 @@
 .ad-codes code{font-family:ui-monospace,Consolas,monospace;font-size:15px;color:#e6f6ec}
 
 .ad-config{border-color:#a68a35;background:#2d2814}.ad-config h2{color:#f2d98a;font-size:20px;margin:0}.ad-config ul{margin:8px 0 0;padding-inline-start:18px;display:grid;gap:8px}.ad-config li{line-height:1.6;color:#efe3bf}.ad-config code{background:#1d1a0d;border-radius:6px;padding:1px 6px;margin-inline-end:6px}
+/* U-3: no animation or transition and no smooth scrolling when the visitor asks for reduced motion. */
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
