@@ -130,7 +130,7 @@ app.get('/api/metrics',metricsHandler(async()=>{const s=(await customer.db()).st
 // Unknown API paths are JSON 404s (never the SPA page with status 200).
 app.use('/api',(_req,res)=>res.status(404).json({error:'Not found'}));
 app.use(errorHandler());
-app.use(express.static(join(root,'dist'),{maxAge:'1h'}));app.get('*',(_req,res)=>res.sendFile(join(root,'dist/index.html')));
+const SW_FILES=new Set(['sw.js','sw-policy.js','offline.html']);app.use(express.static(join(root,'dist'),{maxAge:'1h',setHeaders:(res,p)=>{if(SW_FILES.has(p.split(/[\\/]/).pop()))res.setHeader('Cache-Control','no-cache')}}));app.get('*',(_req,res)=>res.sendFile(join(root,'dist/index.html')));
 // Group practice rooms (WebSocket). Coordination is delegated to the room hub: Redis-backed when REDIS_URL is set,
 // so learners connected to different app instances share one room and the 4-person cap holds globally.
 const hub=createRoomHub();
