@@ -4,6 +4,7 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Activity, BadgeCheck, ClipboardList, FileClock, Inbox, KeyRound, LayoutDashboard, LifeBuoy, LogOut, RefreshCw, Search, ShieldCheck, ShoppingCart, UserCog, Users} from 'lucide-react';
 import './admin.css';
+import {clearSwCaches} from './swCache.js';
 
 class ApiError extends Error { constructor(message, status, data = {}) { super(message); this.status = status; this.data = data; } }
 async function adminApi(path, {method = 'GET', body} = {}) {
@@ -436,7 +437,7 @@ export default function AdminConsole() {
   const perms = session.permissions || [];
   const tabs = TABS.filter(t => perms.includes(t.perm));
   const current = tabs.find(t => t.id === tab) ? tab : tabs[0]?.id;
-  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} setSession(null); setExpired(false); };
+  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} clearSwCaches(); setSession(null); setExpired(false); };
   const refresh = () => adminApi('auth/me').then(setSession).catch(onAuthLost);
   const props = {perms, onAuthLost, me: session.admin};
   const security = <><MfaPanel session={session} onAuthLost={onAuthLost} onChanged={refresh}/><PasswordPanel onAuthLost={onAuthLost}/></>;
