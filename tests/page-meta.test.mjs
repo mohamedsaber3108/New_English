@@ -1,7 +1,7 @@
 // U-1 (language and direction per page) and U-3 (reduced motion): the pure parts, without a browser.
 // The browser checks are in tests/e2e/lang-motion.e2e.mjs.
 import {readFile, readdir} from 'node:fs/promises';
-import {pageMeta, applyPageMeta, routeOf, ARABIC_PAGES, ADMIN_LANG} from '../client/src/pageMeta.js';
+import {pageMeta, applyPageMeta, routeOf, ARABIC_PAGES, ADMIN_LANG, WORKSPACE_PAGES, EN_EXTRA_ROUTES} from '../client/src/pageMeta.js';
 import {motionBehavior} from '../client/src/motion.js';
 
 let failures = 0;
@@ -19,7 +19,17 @@ for (const page of ['home', 'path', 'coach', 'practice', 'world', 'review', 'pro
   const m = pageMeta(page);
   ok(m.lang === 'en' && m.dir === 'ltr' && !hasArabic(m.title) && !hasArabic(m.description) && /USAM Language/.test(m.title), `${page}: workspace page -> lang en, dir ltr, English title and description`);
 }
-ok(new Set(['home', 'path', 'coach', 'practice', 'world', 'review', 'progress'].map(p => pageMeta(p).title)).size === 7, 'each workspace page has its own title');
+ok(new Set(['home', 'path', 'coach', 'practice', 'world', 'review', 'progress'].map(p => pageMeta(p).title)).size === 7, 'each side-menu page has its own title');
+{
+  const titles = WORKSPACE_PAGES.map(p => pageMeta(p).title);
+  ok(WORKSPACE_PAGES.length === 13 && new Set(titles).size === WORKSPACE_PAGES.length, `all ${WORKSPACE_PAGES.length} workspace routes (menu + pronunciation, writing, story, group, settings, engines) have a unique title`);
+  ok(WORKSPACE_PAGES.every(p => pageMeta(p).lang === 'en' && pageMeta(p).dir === 'ltr' && !hasArabic(pageMeta(p).title) && !/^Learn English/.test(pageMeta(p).title)), 'no workspace route falls back to the generic title');
+  const arabicTitles = [...ARABIC_PAGES.filter(p => !['forgot-password', 'reset-password', 'verify-email', 'payment-result'].includes(p)), 'admin'].map(p => pageMeta(p).title);
+  ok(new Set([...titles, ...arabicTitles]).size === titles.length + arabicTitles.length, 'no Arabic page title equals another page title');
+  // the table must agree with the breadcrumb names shown by main.jsx
+  const bc = (await read('src/main.jsx')).match(/\(\{pronunciation:'([^']+)',writing:'([^']+)',story:'([^']+)',group:'([^']+)',settings:'([^']+)',engines:'([^']+)'\}\)\[page\]/);
+  ok(bc && JSON.stringify(Object.values(EN_EXTRA_ROUTES)) === JSON.stringify(bc.slice(1)), 'the extra workspace titles match the breadcrumb names in main.jsx');
+}
 ok(pageMeta('landing').title !== pageMeta('pricing').title && pageMeta('pricing').title !== pageMeta('faq').title, 'each Arabic page has its own title');
 ok(pageMeta('no-such-page').lang === 'en' && pageMeta(undefined).lang === 'ar' && pageMeta('').title === pageMeta('landing').title, 'an unknown route is the English workspace; an empty route is the landing page');
 const admin = pageMeta('admin');
@@ -69,8 +79,19 @@ for (const f of cssFiles) {
 }
 ok(animations >= 3, `found ${animations} animation declarations to check`);
 ok(tooFast.length === 0, `no repeating animation runs faster than 3 times a second${tooFast.length ? ': ' + tooFast.join('; ') : ''}`);
-const smooth = (await Promise.all(['Landing.jsx', 'Customer.jsx', 'main.jsx', 'Marketing.jsx'].map(f => read('src/' + f)))).join('\n');
-ok(!/behavior:\s*'smooth'/.test(smooth), "no script asks for smooth scrolling directly (they use motionBehavior(), which honours reduced motion)");
+const jsxFiles = (await readdir(new URL('../client/src/', import.meta.url))).filter(f => /\.jsx?$/.test(f) && f !== 'motion.js');
+const smooth = (await Promise.all(jsxFiles.map(async f => [f, await read('src/' + f)]))).filter(([, src]) => /behavior:\s*['"]smooth['"]/.test(src)).map(([f]) => f);
+ok(jsxFiles.length >= 8 && smooth.length === 0, `no script in any of the ${jsxFiles.length} client files asks for smooth scrolling directly (they use motionBehavior())${smooth.length ? ': ' + smooth.join(', ') : ''}`);
+// nothing is hidden at rest and revealed only by an animation: no opacity:0 / visibility:hidden outside @keyframes and print rules
+const stripBlocks = (css, re) => { let out = css, m; while ((m = re.exec(out))) { let i = out.indexOf('{', m.index), depth = 0, j = i; for (; j < out.length; j++) { if (out[j] === '{') depth++; else if (out[j] === '}' && --depth === 0) break; } out = out.slice(0, m.index) + out.slice(j + 1); re.lastIndex = 0; } return out; };
+const hiddenAtRest = [];
+for (const f of cssFiles) {
+  const css = stripBlocks(stripBlocks(await read('src/' + f), /@keyframes\s+[\w-]+\s*\{/), /@media\s*print\s*\{/).replace(/\s+/g, '');
+  if (/opacity:0(?![.\d])/.test(css) || /visibility:hidden/.test(css)) hiddenAtRest.push(f);
+}
+ok(hiddenAtRest.length === 0, `no stylesheet hides content at rest (opacity 0 / visibility hidden) outside keyframes and print${hiddenAtRest.length ? ': ' + hiddenAtRest.join(', ') : ''}`);
+const adminSrc = await read('src/Admin.jsx');
+ok((adminSrc.match(/dir="ltr"/g) || []).length > 20 && (adminSrc.match(/dir="ltr"/g) || []).length === (adminSrc.match(/lang="en" dir="ltr"/g) || []).length, 'Admin.jsx: every English-only fragment with dir="ltr" also says lang="en"');
 globalThis.matchMedia = q => ({matches: /reduce/.test(q)});
 ok(motionBehavior() === 'auto', 'with reduced motion on, scripted scrolling is instant');
 globalThis.matchMedia = () => ({matches: false});

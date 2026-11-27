@@ -15,7 +15,10 @@ export const ARABIC_PAGES = ['landing', 'languages', 'method', 'pricing', 'group
 
 const AR_TITLES = {landing: `${SITE} | لغة تعيشها`, languages: `اللغات | ${SITE}`, method: `طريقة التعلّم | ${SITE}`, pricing: `الأسعار | ${SITE}`, groups: `المجموعات | ${SITE}`, contact: `تواصل معنا | ${SITE}`, faq: `الأسئلة الشائعة | ${SITE}`, about: `عن المنصة | ${SITE}`, account: `حسابي | ${SITE}`, support: `المساعدة | ${SITE}`, privacy: `الخصوصية | ${SITE}`, terms: `الشروط | ${SITE}`, resources: `مكتبة البداية | ${SITE}`, placement: `تقييم البداية | ${SITE}`, refund: `الإلغاء والاسترداد | ${SITE}`, acceptable: `الاستخدام المقبول | ${SITE}`, accessibility: `إمكانية الوصول | ${SITE}`, data: `حقوق البيانات | ${SITE}`, admin: `التشغيل | ${SITE}`};
 const AR_DEFAULT_TITLE = SITE;
-const EN_NAV_TITLES = Object.fromEntries(nav.map(([id, label]) => [id, `${label} | ${SITE}`]));
+// Workspace routes outside the side menu use the same names as the breadcrumb in client/src/main.jsx.
+export const EN_EXTRA_ROUTES = {pronunciation: 'Pronunciation lab', writing: 'Writing studio', story: 'Stories', group: 'Group room', settings: 'Settings', engines: 'How it works'};
+export const WORKSPACE_PAGES = [...nav.map(([id]) => id), ...Object.keys(EN_EXTRA_ROUTES)];
+const EN_NAV_TITLES = Object.fromEntries([...nav, ...Object.entries(EN_EXTRA_ROUTES)].map(([id, label]) => [id, `${label} | ${SITE}`]));
 const EN_DEFAULT_TITLE = `Learn English | ${SITE}`;
 
 const AR_DESCRIPTION = 'USAM Language — تعلّم الإنجليزية بالممارسة والمواقف الحقيقية. باقات فردية ومجموعات.';

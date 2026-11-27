@@ -64,12 +64,23 @@ try {
   // ---- U-3: with reduced motion emulated, nothing is animating on the main pages ----
   const calm = await newPage({reducedMotion: 'reduce'});
   ok(await calm.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), 'reduced motion is emulated in this browser context');
-  for (const route of ['landing', 'pricing', 'account', 'coach', 'home', 'progress']) {
+  for (const route of ['landing', 'pricing', 'account', 'coach', 'home', 'progress', 'admin', 'world', 'pronunciation']) {
     await calm.goto(o + '/#' + route);
     await calm.waitForFunction(t => document.title === t, pageMeta(route).title, {timeout: 15000});
     await sleep(700); // longer than the 350 ms page fade-in
     const running = await calm.evaluate(() => document.getAnimations().filter(a => a.playState === 'running').map(a => a.animationName || a.transitionProperty || 'unknown'));
     ok(running.length === 0, `reduced motion: no running animation or transition on /#${route}${running.length ? ' (' + running.join(', ') + ')' : ''}`);
+    if (route === 'landing') {
+      // content must be visible without any animation: the main heading is fully opaque and shown
+      const h1 = await calm.evaluate(() => { const e = document.querySelector('h1'); if (!e) return null; const c = getComputedStyle(e); return {opacity: c.opacity, visibility: c.visibility, display: c.display, text: e.textContent.trim().length}; });
+      ok(h1 && h1.opacity === '1' && h1.visibility === 'visible' && h1.display !== 'none' && h1.text > 0, `reduced motion: the landing h1 is visible (opacity ${h1?.opacity}, visibility ${h1?.visibility})`);
+    }
+  }
+  // the workspace routes that are not in the side menu have their own title too
+  for (const route of ['pronunciation', 'writing', 'story', 'group', 'settings', 'engines']) {
+    await calm.goto(o + '/#' + route);
+    await calm.waitForFunction(t => document.title === t, pageMeta(route).title, {timeout: 15000});
+    ok(true, `/#${route} has its own title (${pageMeta(route).title})`);
   }
 } catch (e) { console.error('  FAIL: unexpected error', e); failures++; }
 finally {
