@@ -4,6 +4,7 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {Activity, BadgeCheck, ClipboardList, FileClock, Inbox, KeyRound, LayoutDashboard, LifeBuoy, LogOut, RefreshCw, Search, ShieldCheck, ShoppingCart, UserCog, Users} from 'lucide-react';
 import './admin.css';
+import {clearSwCaches} from './swCache.js';
 
 class ApiError extends Error { constructor(message, status, data = {}) { super(message); this.status = status; this.data = data; } }
 async function adminApi(path, {method = 'GET', body} = {}) {
@@ -93,7 +94,7 @@ function ReasonAction({label, tone = '', fields = [], onSubmit, busy, confirmTex
 
 function Table({columns, rows, onRow, selected, empty = 'لا توجد نتائج.', rowKey}) {
   if (!rows?.length) return <div className="ad-empty">{empty}</div>;
-  return <div className="ad-table-wrap"><table className="ad-table"><thead><tr>{columns.map(c => <th key={c.key} scope="col">{c.label}</th>)}</tr></thead><tbody>{rows.map(r => <tr key={rowKey(r)} className={selected === rowKey(r) ? 'selected' : ''} onClick={onRow ? () => onRow(r) : undefined} tabIndex={onRow ? 0 : undefined} onKeyDown={onRow ? e => { if (e.key === 'Enter') onRow(r); } : undefined}>{columns.map(c => <td key={c.key} dir={c.ltr ? 'ltr' : undefined}>{c.render ? c.render(r) : r[c.key] ?? '—'}</td>)}</tr>)}</tbody></table></div>;
+  return <div className="ad-table-wrap"><table className="ad-table"><thead><tr>{columns.map(c => <th key={c.key} scope="col">{c.label}</th>)}</tr></thead><tbody>{rows.map(r => <tr key={rowKey(r)} className={selected === rowKey(r) ? 'selected' : ''} onClick={onRow ? () => onRow(r) : undefined} tabIndex={onRow ? 0 : undefined} onKeyDown={onRow ? e => { if (e.key === 'Enter') onRow(r); } : undefined}>{columns.map(c => <td key={c.key} lang={c.ltr ? 'en' : undefined} dir={c.ltr ? 'ltr' : undefined}>{c.render ? c.render(r) : r[c.key] ?? '—'}</td>)}</tr>)}</tbody></table></div>;
 }
 const ListState = ({list}) => list.loading && !list.data ? <div className="ad-empty">جاري التحميل…</div> : list.error ? <Notice kind="error">{list.error}</Notice> : null;
 
@@ -126,7 +127,7 @@ function SignIn({onSignedIn, expired}) {
       <KeyRound size={30} aria-hidden="true"/>
       <h2>التحقق بخطوتين</h2>
       <p>{useRecovery ? 'أدخل أحد رموز الاسترداد التي حفظتها عند تفعيل التحقق بخطوتين. كل رمز يعمل مرة واحدة.' : 'أدخل الرمز المكون من ٦ أرقام من تطبيق المصادقة على هاتفك.'}</p>
-      <label>{useRecovery ? 'رمز الاسترداد' : 'رمز التحقق'}<input dir="ltr" className="ad-code" value={code} onChange={e => setCode(e.target.value)} autoFocus required {...(useRecovery ? {autoComplete: 'off', placeholder: 'xxxxx-xxxxx'} : {inputMode: 'numeric', autoComplete: 'one-time-code', pattern: '[0-9 ]{6,7}', maxLength: 7, placeholder: '123456'})}/></label>
+      <label>{useRecovery ? 'رمز الاسترداد' : 'رمز التحقق'}<input lang="en" dir="ltr" className="ad-code" value={code} onChange={e => setCode(e.target.value)} autoFocus required {...(useRecovery ? {autoComplete: 'off', placeholder: 'xxxxx-xxxxx'} : {inputMode: 'numeric', autoComplete: 'one-time-code', pattern: '[0-9 ]{6,7}', maxLength: 7, placeholder: '123456'})}/></label>
       <button className="m-action" type="submit" disabled={busy}>{busy ? 'جاري التحقق…' : 'تأكيد'}</button>
       <Notice kind="error">{error}</Notice>
       <div className="ad-row"><button type="button" className="ad-btn ghost" onClick={() => { setUseRecovery(!useRecovery); setCode(''); setError(''); }}>{useRecovery ? 'استخدام تطبيق المصادقة' : 'فقدت هاتفي — استخدام رمز استرداد'}</button><button type="button" className="ad-btn ghost" onClick={() => { setStage('password'); setError(''); }}>رجوع</button></div>
@@ -136,11 +137,11 @@ function SignIn({onSignedIn, expired}) {
       <ShieldCheck size={30} aria-hidden="true"/>
       <h2>تسجيل دخول المشرفين</h2>
       {expired && <Notice kind="info">انتهت جلستك أو تم تسجيل خروجك. سجّل دخولك من جديد.</Notice>}
-      <label>البريد الإلكتروني<input type="email" dir="ltr" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} required/></label>
-      <label>كلمة المرور<input type="password" dir="ltr" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required/></label>
+      <label>البريد الإلكتروني<input type="email" lang="en" dir="ltr" autoComplete="username" value={email} onChange={e => setEmail(e.target.value)} required/></label>
+      <label>كلمة المرور<input type="password" lang="en" dir="ltr" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required/></label>
       <button className="m-action" type="submit" disabled={busy}>{busy ? 'جاري الدخول…' : 'دخول آمن'}</button>
       <Notice kind="error">{error}</Notice>
-      <small>لا يوجد حساب؟ يُنشئ المالك حسابات المشرفين من «المشرفون والأدوار»، وأول مالك يُنشأ عبر أداة الخادم <code dir="ltr">npm run admin:create</code>.</small>
+      <small>لا يوجد حساب؟ يُنشئ المالك حسابات المشرفين من «المشرفون والأدوار»، وأول مالك يُنشأ عبر أداة الخادم <code lang="en" dir="ltr">npm run admin:create</code>.</small>
     </form></section>;
 }
 
@@ -156,7 +157,7 @@ function Overview({onAuthLost}) {
   const INTEGRATION = {storage: 'التخزين', payments: 'الدفع (Paymob)', email: 'البريد (Resend)', ai: 'الذكاء الاصطناعي (OpenAI)', rateLimit: 'تحديد معدل الطلبات', rooms: 'الغرف الجماعية', auditKeyed: 'توقيع سجل التدقيق', accessEnforcement: 'فرض الاشتراك'};
   const VALUE = {configured: 'مفعّل', 'awaiting credentials': 'بانتظار بيانات الاعتماد', enforced: 'مفروض', open: 'مفتوح', true: 'مفعّل', false: 'غير مفعّل', json: 'ملف JSON (خادم واحد)', postgres: 'PostgreSQL', memory: 'ذاكرة (خادم واحد)', redis: 'Redis (مشترك)'};
   return <div className="ad-stack">
-    {d.configWarnings?.length > 0 && <div className="x-card ad-config"><h2>تنبيهات إعداد الخادم ({d.configWarnings.length})</h2><p>إعدادات بيئة التشغيل التي تحتاج مراجعة قبل الإطلاق. لا تُعرض أي قيم سرية.</p><ul>{d.configWarnings.map(w => <li key={w.key}><code dir="ltr">{w.key}</code> <span dir="ltr">{w.message}</span></li>)}</ul></div>}
+    {d.configWarnings?.length > 0 && <div className="x-card ad-config"><h2>تنبيهات إعداد الخادم ({d.configWarnings.length})</h2><p>إعدادات بيئة التشغيل التي تحتاج مراجعة قبل الإطلاق. لا تُعرض أي قيم سرية.</p><ul>{d.configWarnings.map(w => <li key={w.key}><code lang="en" dir="ltr">{w.key}</code> <span lang="en" dir="ltr">{w.message}</span></li>)}</ul></div>}
     <div className="ad-metrics">{cards.map(([l, v]) => <div className="ad-metric" key={l}><small>{l}</small><strong>{v}</strong></div>)}</div>
     <div className="x-card"><h2><Activity size={20} aria-hidden="true"/> حالة التكاملات</h2><p>تُعرض حالة الإعداد فقط؛ لا تُعرض أي مفاتيح سرية.</p>
       <div className="ad-integrations">{Object.entries(d.integrations || {}).map(([k, v]) => <div key={k}><span>{INTEGRATION[k] || k}</span><Badge tone={tone(v)}>{VALUE[String(v)] || String(v)}</Badge></div>)}</div></div>
@@ -190,11 +191,11 @@ function UsersScreen({perms, onAuthLost}) {
     <aside className="x-card ad-detail" aria-live="polite">
       {!sel ? <p>اختر متعلمًا لعرض التفاصيل والإجراءات.</p> : !detail ? <p>جاري التحميل…</p> : <>
         <h2>{u.name}</h2>
-        <p dir="ltr" className="ad-ltr">{u.email} · {u.phone}</p>
+        <p lang="en" dir="ltr" className="ad-ltr">{u.email} · {u.phone}</p>
         <div className="ad-kv"><span>الحالة</span>{u.status === 'suspended' ? <Badge tone="bad">موقوف</Badge> : <Badge tone="good">نشط</Badge>}<span>البريد</span>{u.emailVerified ? <Badge tone="good">مؤكد</Badge> : <Badge tone="warn">غير مؤكد</Badge>}<span>الاشتراك</span>{u.subscription ? <Badge tone={u.subscription.active ? 'good' : 'warn'}>{u.subscription.plan === 'plus' ? 'بلاس' : 'أساسي'} · {u.subscription.active ? 'نشط' : 'منتهي'} · {fmtDay(u.subscription.expiresAt)} · {u.subscription.source === 'manual' ? 'منحة يدوية' : 'دفع'}</Badge> : <Badge>لا يوجد</Badge>}<span>جلسات مفتوحة</span><b>{detail.activeSessions}</b><span>المستوى</span><b>{detail.learning.level || '—'}</b><span>نقاط التعلم</span><b><bdi>{detail.learning.xp} XP</bdi></b><span>جلسات التعلم</span><b>{detail.learning.sessions}</b><span>آخر نشاط</span><b>{detail.learning.lastActive ? fmtDay(detail.learning.lastActive) : '—'}</b><span>كلمات للمراجعة</span><b>{detail.learning.reviews} ({detail.learning.reviewsDue ?? 0} مستحقة الآن)</b></div>
         <h3>النشاط الأخير</h3>{detail.recentActivity?.length ? detail.recentActivity.map((a, i) => <div className="ad-line" key={i}><span>{a.title}</span><span>{fmtDate(a.date)}</span><Badge tone={a.xp > 0 ? 'good' : 'neutral'}><bdi>+{a.xp} XP</bdi></Badge></div>) : <p>لا يوجد نشاط مسجل بعد.</p>}
-        <h3>الطلبات</h3>{detail.orders.length ? detail.orders.map(o => <div className="ad-line" key={o.reference}><span dir="ltr">{o.reference}</span><span>{o.plan === 'plus' ? 'بلاس' : 'أساسي'} · {o.term === 'yearly' ? 'سنوي' : 'شهري'}</span><Badge>{ORDER_STATUS[o.status] || o.status}</Badge></div>) : <p>لا توجد طلبات.</p>}
-        <h3>تذاكر الدعم</h3>{detail.tickets.length ? detail.tickets.map(t => <div className="ad-line" key={t.reference}><span dir="ltr">{t.reference}</span><span>{t.subject}</span><Badge>{TICKET_STATUS[t.status] || t.status}</Badge></div>) : <p>لا توجد تذاكر.</p>}
+        <h3>الطلبات</h3>{detail.orders.length ? detail.orders.map(o => <div className="ad-line" key={o.reference}><span lang="en" dir="ltr">{o.reference}</span><span>{o.plan === 'plus' ? 'بلاس' : 'أساسي'} · {o.term === 'yearly' ? 'سنوي' : 'شهري'}</span><Badge>{ORDER_STATUS[o.status] || o.status}</Badge></div>) : <p>لا توجد طلبات.</p>}
+        <h3>تذاكر الدعم</h3>{detail.tickets.length ? detail.tickets.map(t => <div className="ad-line" key={t.reference}><span lang="en" dir="ltr">{t.reference}</span><span>{t.subject}</span><Badge>{TICKET_STATUS[t.status] || t.status}</Badge></div>) : <p>لا توجد تذاكر.</p>}
         <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
         {(perms.includes('users.write') || perms.includes('orders.write')) && <div className="ad-actions">
           {perms.includes('users.write') && <>
@@ -230,15 +231,15 @@ function OrdersScreen({perms, onAuthLost}) {
       </Toolbar>
       <ListState list={list}/>
       {list.data && <><Table rowKey={r => r.reference} selected={sel} onRow={r => { setSel(r.reference); act.setMsg({kind: '', text: ''}); }} rows={list.data.items} columns={[
-        {key: 'reference', label: 'المرجع', ltr: true}, {key: 'customer', label: 'العميل', render: r => r.customer?.email || 'حساب محذوف', ltr: true},
+        {key: 'reference', label: 'المرجع', ltr: true}, {key: 'customer', label: 'العميل', render: r => r.customer?.email || <span lang="ar" dir="rtl">حساب محذوف</span>, ltr: true},
         {key: 'plan', label: 'الباقة', render: r => `${r.plan === 'plus' ? 'بلاس' : 'أساسي'} · ${r.term === 'yearly' ? 'سنوي' : 'شهري'}`},
         {key: 'amount', label: 'المبلغ', render: r => `${r.amount} جنيه`}, {key: 'status', label: 'الحالة', render: r => <Badge tone={r.status === 'paid' ? 'good' : r.status === 'refunded' || r.status === 'failed' ? 'bad' : 'warn'}>{ORDER_STATUS[r.status] || r.status}</Badge>},
         {key: 'createdAt', label: 'التاريخ', render: r => fmtDay(r.createdAt)}]}/><Pager data={list.data} onPage={list.setPage}/></>}
     </div>
     <aside className="x-card ad-detail" aria-live="polite">
       {!o ? <p>اختر طلبًا لعرض التفاصيل.</p> : <>
-        <h2 dir="ltr" className="ad-ltr">{o.reference}</h2>
-        <div className="ad-kv"><span>العميل</span><b dir="ltr">{o.customer?.email || '—'}</b><span>المبلغ</span><b>{o.amount} جنيه</b><span>الحالة</span><Badge>{ORDER_STATUS[o.status] || o.status}</Badge><span>أُنشئ</span><b>{fmtDate(o.createdAt)}</b><span>دُفع</span><b>{fmtDate(o.paidAt)}</b><span>ينتهي</span><b>{fmtDay(o.expiresAt)}</b>{o.manualPaymentReference && <><span>مرجع الدفع اليدوي</span><b dir="ltr">{o.manualPaymentReference}</b></>}{o.paymobOrderId && <><span>طلب Paymob</span><b dir="ltr">{o.paymobOrderId}</b></>}{o.transactionId && <><span>عملية Paymob</span><b dir="ltr">{o.transactionId}</b></>}{o.refundedAt && <><span>استُرد</span><b>{fmtDate(o.refundedAt)}</b></>}</div>
+        <h2 lang="en" dir="ltr" className="ad-ltr">{o.reference}</h2>
+        <div className="ad-kv"><span>العميل</span><b lang="en" dir="ltr">{o.customer?.email || '—'}</b><span>المبلغ</span><b>{o.amount} جنيه</b><span>الحالة</span><Badge>{ORDER_STATUS[o.status] || o.status}</Badge><span>أُنشئ</span><b>{fmtDate(o.createdAt)}</b><span>دُفع</span><b>{fmtDate(o.paidAt)}</b><span>ينتهي</span><b>{fmtDay(o.expiresAt)}</b>{o.manualPaymentReference && <><span>مرجع الدفع اليدوي</span><b lang="en" dir="ltr">{o.manualPaymentReference}</b></>}{o.paymobOrderId && <><span>طلب Paymob</span><b lang="en" dir="ltr">{o.paymobOrderId}</b></>}{o.transactionId && <><span>عملية Paymob</span><b lang="en" dir="ltr">{o.transactionId}</b></>}{o.refundedAt && <><span>استُرد</span><b>{fmtDate(o.refundedAt)}</b></>}</div>
         <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
         {perms.includes('orders.write') && <div className="ad-actions">
           {o.status === 'pending_contact' && <ReasonAction label="تفعيل بعد التحقق من الدفع" busy={act.busy} fields={[{name: 'paymentReference', label: 'مرجع الدفع المُتحقق منه', required: true, min: 6}]} confirmText="تأكد أنك راجعت الدفع في سجلات البنك/التاجر. متابعة؟" onSubmit={b => act.run(() => adminApi(`orders/${o.reference}/activate`, {method: 'POST', body: b}), 'تم تفعيل الطلب والاشتراك.').then(after)}/>}
@@ -268,7 +269,7 @@ function SupportScreen({perms, onAuthLost}) {
     </div>
     <aside className="x-card ad-detail" aria-live="polite">
       {!t ? <p>اختر تذكرة لعرضها.</p> : <>
-        <h2>{t.subject}</h2><p dir="ltr" className="ad-ltr">{t.reference} · {t.customer?.email || 'حساب محذوف'}</p>
+        <h2>{t.subject}</h2><p lang="en" dir="ltr" className="ad-ltr">{t.reference} · {t.customer?.email || <span lang="ar" dir="rtl">حساب محذوف</span>}</p>
         <div className="ad-message">{t.message}</div>
         <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
         {perms.includes('support.write') ? <form className="ad-reason" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('support/' + t.reference, {method: 'PATCH', body: edit}), 'تم تحديث التذكرة. يراها العميل في مركز المساعدة.'); if (r) list.reload(); }}>
@@ -299,8 +300,8 @@ function LeadsScreen({perms, onAuthLost}) {
     </div>
     <aside className="x-card ad-detail" aria-live="polite">
       {!l ? <p>اختر طلب تواصل لعرضه.</p> : <>
-        <h2>{l.name}</h2><p dir="ltr" className="ad-ltr">{l.email} · {l.phone}</p>
-        <div className="ad-kv"><span>المرجع</span><b dir="ltr">{l.reference}</b><span>النوع</span><b>{KIND[l.kind] || l.kind}</b><span>اللغة</span><b>{l.language}</b>{l.company && <><span>الجهة</span><b>{l.company}</b></>}{l.plan && <><span>الباقة</span><b>{l.plan} · {l.term}</b></>}{l.groupSize && <><span>حجم المجموعة</span><b>{l.groupSize}</b></>}{l.preferredDate && <><span>الموعد المفضل</span><b>{l.preferredDate} {l.preferredTime} (القاهرة) — يحتاج تأكيدًا</b></>}<span>وصل</span><b>{fmtDate(l.createdAt)}</b></div>
+        <h2>{l.name}</h2><p lang="en" dir="ltr" className="ad-ltr">{l.email} · {l.phone}</p>
+        <div className="ad-kv"><span>المرجع</span><b lang="en" dir="ltr">{l.reference}</b><span>النوع</span><b>{KIND[l.kind] || l.kind}</b><span>اللغة</span><b>{l.language}</b>{l.company && <><span>الجهة</span><b>{l.company}</b></>}{l.plan && <><span>الباقة</span><b>{l.plan} · {l.term}</b></>}{l.groupSize && <><span>حجم المجموعة</span><b>{l.groupSize}</b></>}{l.preferredDate && <><span>الموعد المفضل</span><b>{l.preferredDate} {l.preferredTime} (القاهرة) — يحتاج تأكيدًا</b></>}<span>وصل</span><b>{fmtDate(l.createdAt)}</b></div>
         {l.message && <div className="ad-message">{l.message}</div>}
         {l.notes?.length > 0 && <><h3>ملاحظات الفريق</h3>{l.notes.map((n, i) => <div className="ad-line" key={i}><span>{fmtDate(n.at)}</span><span>{n.text}</span></div>)}</>}
         <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
@@ -324,7 +325,7 @@ function AuditScreen({onAuthLost}) {
   return <div className="ad-stack">
     <div className="x-card ad-verify"><div><h2><BadgeCheck size={20} aria-hidden="true"/> سلامة السجل</h2><p>كل إدخال مرتبط بتوقيع ما قبله. أي تعديل أو حذف أو إعادة ترتيب يكسر التحقق من موضعه.</p></div>
       <button type="button" className="ad-btn primary" disabled={act.busy} onClick={async () => setVerify(await act.run(() => adminApi('audit/verify'), r => r.ok ? 'السجل سليم.' : 'تم اكتشاف خلل في السجل.'))}>{act.busy ? 'جاري التحقق…' : 'تحقق من السجل'}</button>
-      {verify && <div className={'ad-verify-result ' + (verify.ok ? 'good' : 'bad')}>{verify.ok ? <>سليم · {verify.checked} إدخال موقّع{verify.keyed ? ' بمفتاح سري' : ' (بدون مفتاح سري — اضبط AUDIT_HMAC_KEY)'}{verify.legacy ? ` · ${verify.legacy} إدخال قديم غير مرتبط` : ''}</> : <>خلل عند الإدخال #{verify.brokenAt}: <span dir="ltr">{verify.reason}</span></>}</div>}
+      {verify && <div className={'ad-verify-result ' + (verify.ok ? 'good' : 'bad')}>{verify.ok ? <>سليم · {verify.checked} إدخال موقّع{verify.keyed ? ' بمفتاح سري' : ' (بدون مفتاح سري — اضبط AUDIT_HMAC_KEY)'}{verify.legacy ? ` · ${verify.legacy} إدخال قديم غير مرتبط` : ''}</> : <>خلل عند الإدخال #{verify.brokenAt}: <span lang="en" dir="ltr">{verify.reason}</span></>}</div>}
       {act.msg.kind === 'error' && <Notice kind="error">{act.msg.text}</Notice>}
     </div>
     <Toolbar q={list.q} setQ={list.setQ} onRefresh={list.reload}><Select label="الحدث" value={event} onChange={setEvent} options={events}/><Select label="المنفّذ" value={actorType} onChange={setActorType} options={{admin: 'مشرف', user: 'متعلم', system: 'النظام', cli: 'أداة الخادم', 'legacy-token': 'الرمز القديم'}}/></Toolbar>
@@ -332,7 +333,7 @@ function AuditScreen({onAuthLost}) {
     {list.data && <><Table rowKey={r => r.id} rows={list.data.items} columns={[
       {key: 'seq', label: '#', render: r => r.seq || '—'}, {key: 'at', label: 'الوقت', render: r => fmtDate(r.at)}, {key: 'event', label: 'الحدث', ltr: true},
       {key: 'actor', label: 'المنفّذ', ltr: true, render: r => r.actorLabel}, {key: 'target', label: 'الهدف', ltr: true, render: r => r.target ? `${r.target.type}:${String(r.target.id).slice(0, 14)}` : '—'},
-      {key: 'meta', label: 'التفاصيل', render: r => <span className="ad-meta" dir="ltr">{r.meta?.reason ? `reason: ${r.meta.reason}` : Object.entries(r.meta || {}).slice(0, 3).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || '—'}</span>},
+      {key: 'meta', label: 'التفاصيل', render: r => <span className="ad-meta" lang="en" dir="ltr">{r.meta?.reason ? `reason: ${r.meta.reason}` : Object.entries(r.meta || {}).slice(0, 3).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ') || '—'}</span>},
       {key: 'chained', label: 'مرتبط', render: r => r.chained ? <Badge tone="good">نعم</Badge> : <Badge>قديم</Badge>}]}/><Pager data={list.data} onPage={list.setPage}/></>}
   </div>;
 }
@@ -362,15 +363,15 @@ function AdminsScreen({me, perms, onAuthLost}) {
       <h2><KeyRound size={20} aria-hidden="true"/> إضافة مشرف</h2>
       <div className="ad-grid">
         <label>الاسم<input value={form.name} onChange={e => setForm({...form, name: e.target.value})} required minLength={2} maxLength={80}/></label>
-        <label>البريد<input type="email" dir="ltr" value={form.email} onChange={e => setForm({...form, email: e.target.value})} required/></label>
+        <label>البريد<input type="email" lang="en" dir="ltr" value={form.email} onChange={e => setForm({...form, email: e.target.value})} required/></label>
         <label>الدور<select value={form.role} onChange={e => setForm({...form, role: e.target.value})}>{Object.keys(ROLE_LABEL).filter(k => k !== 'owner' || me.role === 'owner').map(k => <option key={k} value={k}>{ROLE_LABEL[k]}</option>)}</select></label>
-        <label>كلمة مرور مؤقتة (١٢ حرفًا على الأقل)<input type="password" dir="ltr" autoComplete="new-password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} required minLength={12} maxLength={128}/></label>
+        <label>كلمة مرور مؤقتة (١٢ حرفًا على الأقل)<input type="password" lang="en" dir="ltr" autoComplete="new-password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} required minLength={12} maxLength={128}/></label>
       </div>
       <button className="ad-btn primary" type="submit" disabled={act.busy}>{act.busy ? 'جاري الإنشاء…' : 'إنشاء الحساب'}</button>
     </form>}
     {roles && <div className="x-card"><h2><ClipboardList size={20} aria-hidden="true"/> مصفوفة الصلاحيات</h2><p>الأدوار محددة في الخادم؛ يُطبق الخادم الصلاحية على كل طلب بغض النظر عن الواجهة.</p>
       <div className="ad-table-wrap"><table className="ad-table ad-matrix"><thead><tr><th scope="col">الصلاحية</th>{Object.keys(roles.roles).map(r => <th key={r} scope="col">{ROLE_LABEL[r] || r}</th>)}</tr></thead>
-        <tbody>{Object.entries(roles.permissions).map(([p, desc]) => <tr key={p}><td><b dir="ltr">{p}</b><small>{desc}</small></td>{Object.entries(roles.roles).map(([r, def]) => <td key={r} className="ad-center">{def.permissions.includes(p) ? <span aria-label="مسموح">✓</span> : <span aria-label="غير مسموح" className="ad-dim">—</span>}</td>)}</tr>)}</tbody></table></div></div>}
+        <tbody>{Object.entries(roles.permissions).map(([p, desc]) => <tr key={p}><td><b lang="en" dir="ltr">{p}</b><small>{desc}</small></td>{Object.entries(roles.roles).map(([r, def]) => <td key={r} className="ad-center">{def.permissions.includes(p) ? <span aria-label="مسموح">✓</span> : <span aria-label="غير مسموح" className="ad-dim">—</span>}</td>)}</tr>)}</tbody></table></div></div>}
   </div>;
 }
 
@@ -380,8 +381,8 @@ function PasswordPanel({onAuthLost}) {
   const act = useAction(onAuthLost);
   return <form className="x-card ad-password" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('auth/password', {method: 'POST', body: f}), r => r.message); if (r) setF({currentPassword: '', newPassword: ''}); }}>
     <h2>تغيير كلمة المرور</h2>
-    <label>الحالية<input type="password" dir="ltr" autoComplete="current-password" value={f.currentPassword} onChange={e => setF({...f, currentPassword: e.target.value})} required/></label>
-    <label>الجديدة (١٢ حرفًا على الأقل)<input type="password" dir="ltr" autoComplete="new-password" value={f.newPassword} onChange={e => setF({...f, newPassword: e.target.value})} required minLength={12}/></label>
+    <label>الحالية<input type="password" lang="en" dir="ltr" autoComplete="current-password" value={f.currentPassword} onChange={e => setF({...f, currentPassword: e.target.value})} required/></label>
+    <label>الجديدة (١٢ حرفًا على الأقل)<input type="password" lang="en" dir="ltr" autoComplete="new-password" value={f.newPassword} onChange={e => setF({...f, newPassword: e.target.value})} required minLength={12}/></label>
     <div className="ad-row"><button className="ad-btn primary" type="submit" disabled={act.busy}>حفظ</button></div>
     <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
   </form>;
@@ -395,15 +396,15 @@ function MfaPanel({session, onAuthLost, onChanged}) {
   if (codes) return <div className="x-card ad-mfa">
     <h2><ShieldCheck size={20} aria-hidden="true"/> التحقق بخطوتين مفعّل</h2>
     <Notice kind="info">احفظ رموز الاسترداد هذه في مكان آمن (مدير كلمات مرور أو ورقة في مكان مغلق). كل رمز يعمل مرة واحدة إذا فقدت هاتفك، ولن تظهر مرة أخرى.</Notice>
-    <ol className="ad-codes" dir="ltr">{codes.map(c => <li key={c}><code>{c}</code></li>)}</ol>
+    <ol className="ad-codes" lang="en" dir="ltr">{codes.map(c => <li key={c}><code>{c}</code></li>)}</ol>
     <div className="ad-row"><button type="button" className="ad-btn" onClick={() => navigator.clipboard?.writeText(codes.join('\n'))}>نسخ الرموز</button><button type="button" className="ad-btn primary" onClick={() => { setCodes(null); onChanged(); }}>حفظتها، متابعة</button></div>
   </div>;
   if (enabled) return <form className="x-card ad-mfa" onSubmit={async e => { e.preventDefault(); if (!confirm('سيصبح الدخول بكلمة المرور فقط. متابعة؟')) return; const r = await act.run(() => adminApi('mfa/disable', {method: 'POST', body: dis}), 'تم إيقاف التحقق بخطوتين.'); if (r) { setDis({password: '', code: ''}); onChanged(); } }}>
     <h2><ShieldCheck size={20} aria-hidden="true"/> التحقق بخطوتين</h2>
     <p><Badge tone="good">مفعّل</Badge> {session.recoveryCodesLeft != null && <>· متبقٍ {session.recoveryCodesLeft} من رموز الاسترداد{session.recoveryCodesLeft <= 2 && ' — اطلب من المالك إعادة الضبط لإصدار رموز جديدة'}</>}</p>
     <h3>إيقاف التحقق بخطوتين</h3>
-    <label>كلمة المرور<input type="password" dir="ltr" autoComplete="current-password" value={dis.password} onChange={e => setDis({...dis, password: e.target.value})} required/></label>
-    <label>رمز التطبيق الحالي<input dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={dis.code} onChange={e => setDis({...dis, code: e.target.value})} required/></label>
+    <label>كلمة المرور<input type="password" lang="en" dir="ltr" autoComplete="current-password" value={dis.password} onChange={e => setDis({...dis, password: e.target.value})} required/></label>
+    <label>رمز التطبيق الحالي<input lang="en" dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={dis.code} onChange={e => setDis({...dis, code: e.target.value})} required/></label>
     <div className="ad-row"><button className="ad-btn danger" type="submit" disabled={act.busy}>إيقاف</button></div>
     <Notice kind={act.msg.kind}>{act.msg.text}</Notice>
   </form>;
@@ -415,10 +416,10 @@ function MfaPanel({session, onAuthLost, onChanged}) {
     </> : <form className="ad-stack" onSubmit={async e => { e.preventDefault(); const r = await act.run(() => adminApi('mfa/enable', {method: 'POST', body: {code}}), r => r.message); if (r) { setCodes(r.recoveryCodes); setSetup(null); setCode(''); } }}>
       <ol className="ad-steps">
         <li>افتح تطبيق المصادقة واختر «إضافة حساب» ثم «إدخال مفتاح الإعداد».</li>
-        <li>أدخل هذا المفتاح (نوع: حسب الوقت):<div className="ad-secret" dir="ltr">{setup.secret.match(/.{1,4}/g).join(' ')}</div><small>على الهاتف يمكنك فتح <a href={setup.otpauthUri} dir="ltr">رابط الإضافة المباشر</a>.</small></li>
+        <li>أدخل هذا المفتاح (نوع: حسب الوقت):<div className="ad-secret" lang="en" dir="ltr">{setup.secret.match(/.{1,4}/g).join(' ')}</div><small>على الهاتف يمكنك فتح <a href={setup.otpauthUri} lang="en" dir="ltr">رابط الإضافة المباشر</a>.</small></li>
         <li>أدخل الرمز المكون من ٦ أرقام الذي يظهر في التطبيق.</li>
       </ol>
-      <label>رمز التحقق<input dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={code} onChange={e => setCode(e.target.value)} required autoFocus/></label>
+      <label>رمز التحقق<input lang="en" dir="ltr" className="ad-code" inputMode="numeric" autoComplete="one-time-code" maxLength={7} value={code} onChange={e => setCode(e.target.value)} required autoFocus/></label>
       <div className="ad-row"><button className="ad-btn primary" type="submit" disabled={act.busy}>{act.busy ? 'جاري التحقق…' : 'تفعيل'}</button><button type="button" className="ad-btn ghost" onClick={() => setSetup(null)}>إلغاء</button></div>
     </form>}
     {act.msg.text && act.msg.kind === 'error' && <Notice kind="error">{act.msg.text}</Notice>}
@@ -430,13 +431,13 @@ export default function AdminConsole() {
   const [session, setSession] = useState(undefined), [expired, setExpired] = useState(false), [tab, setTab] = useState('overview'), [pw, setPw] = useState(false);
   const mounted = useRef(true);
   useEffect(() => { adminApi('auth/me').then(setSession).catch(() => setSession(null)); return () => { mounted.current = false; }; }, []);
-  const onAuthLost = useCallback(() => { setSession(null); setExpired(true); }, []);
+  const onAuthLost = useCallback(() => { clearSwCaches(); setSession(null); setExpired(true); }, []);
   if (session === undefined) return <section className="x-page"><div className="x-card">جاري التحقق من الجلسة…</div></section>;
   if (!session) return <SignIn expired={expired} onSignedIn={d => { setExpired(false); setSession(d); const first = TABS.find(t => d.permissions.includes(t.perm)); setTab(first?.id || 'overview'); adminApi('auth/me').then(setSession).catch(() => {}); }}/>;
   const perms = session.permissions || [];
   const tabs = TABS.filter(t => perms.includes(t.perm));
   const current = tabs.find(t => t.id === tab) ? tab : tabs[0]?.id;
-  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} setSession(null); setExpired(false); };
+  const logout = async () => { try { await adminApi('auth/logout', {method: 'POST'}); } catch {} clearSwCaches(); setSession(null); setExpired(false); };
   const refresh = () => adminApi('auth/me').then(setSession).catch(onAuthLost);
   const props = {perms, onAuthLost, me: session.admin};
   const security = <><MfaPanel session={session} onAuthLost={onAuthLost} onChanged={refresh}/><PasswordPanel onAuthLost={onAuthLost}/></>;
