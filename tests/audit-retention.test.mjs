@@ -57,6 +57,10 @@ try {
       const app = await as(appRole), ret = await as(retRole);
       const code = (db, text, params) => db.query(text, params).then(() => null, e => e.code);
       ok(app.applied.length === 0 && ret.applied.length === 0, 'with DB_SKIP_MIGRATIONS=1 restricted roles start without running migrations');
+      ok((await app.health()).ok === true, 'readiness: restricted role with an up-to-date schema is ready');
+      await owner.query("INSERT INTO schema_migrations (name) VALUES ('999_unknown.sql')");
+      ok((await app.health()).ok === false, 'readiness: restricted role reports not ready when the schema differs from the migration files');
+      await owner.query("DELETE FROM schema_migrations WHERE name = '999_unknown.sql'");
       for (let i = 0; i < 4; i++) await app.tx(q => repo.audit.append(q, {event: 'role_test', meta: {i}}));
       ok((await repo.audit.verify(app)).ok, 'app role: repo.audit.append works and the chain verifies');
       ok(await code(app, "UPDATE audit_log SET event = 'x'") === '42501', 'app role cannot UPDATE audit_log');

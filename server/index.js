@@ -53,7 +53,7 @@ app.get('/api/health',(_req,res)=>res.json({ok:true,coachConfigured:aiConfigured
 // Readiness: storage is reachable. Use this for load-balancer readiness/rolling-deploy gates.
 // Readiness = storage reachable. Rate-limit degradation is reported but does not fail readiness
 // (the limiter fails open to per-instance memory so the service stays available).
-app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();res.json({ready:true,...h,rateLimit:limiter.status(),rooms:hub.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status(),rooms:hub.status()})}});
+app.get('/api/ready',async(_req,res)=>{try{const h=await customer.storageHealth();if(h.ok===false)return res.status(503).json({ready:false,error:'database migrations are not up to date',migrations:h.migrations,rateLimit:limiter.status(),rooms:hub.status()});res.json({ready:true,...h,rateLimit:limiter.status(),rooms:hub.status()})}catch(e){res.status(503).json({ready:false,error:'storage unavailable',rateLimit:limiter.status(),rooms:hub.status()})}});
 // Lead anti-spam: 5 successfully saved leads per IP per hour (shared across instances when Redis is configured).
 const LEAD_LIMIT=5,LEAD_WINDOW=3600000;
 const todayCairo=()=>{const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));return `${p.year}-${p.month}-${p.day}`};

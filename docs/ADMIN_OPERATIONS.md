@@ -67,9 +67,13 @@ changing their role ends their sessions immediately.
 - Insert-only audit (deploy step, not a migration): run `docs/audit-roles.sql` once as a database administrator
   with the real role names, for example `psql "$ADMIN_URL" -v app_role=usam_app -v retention_role=usam_audit_retention -f docs/audit-roles.sql`.
   The app role then can read and add `audit_log` rows and move the chain head (`audit_chain.seq`, `head`), but cannot
-  UPDATE or DELETE `audit_log`. Leave `AUDIT_MAX_ENTRIES` unset for the app (it would need DELETE).
+  DELETE from `audit_log` or UPDATE it (except the `legacy` column used by account erasure). Leave `AUDIT_MAX_ENTRIES`
+  unset for the app (it would need DELETE); the app logs a warning at start-up if both are set.
   The chain head row must stay updatable by the app, so it is protected by the HMAC chain, not by the grant.
-  Try this on a copy first. The app runs migrations at start-up, so run migrations with the table-owner role.
+  Try this on a copy first. With restricted roles the app does not run migrations (`DB_SKIP_MIGRATIONS=1`): run
+  `npm run db:migrate` as the table-owner role before each restart that ships a new migration, then re-run
+  `docs/audit-roles.sql` if the migration added tables. `/api/ready` answers 503 (and the app logs an error) while the
+  schema and the migration files differ.
   `tests/audit-retention.test.mjs` checks the grants when `DATABASE_URL` is set (skipped on PGlite).
 
 ## 5b. Sensitive actions (step-up and second approver)

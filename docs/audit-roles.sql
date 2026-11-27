@@ -1,6 +1,6 @@
 -- Audit roles (A-1). Run ONCE by a database administrator at deploy time, after `npm run db:migrate`. Not part of any migration.
 -- Replace :app_role / :retention_role with the real role names and set passwords outside this file.
--- Run it again after any migration that adds tables (default privileges are not used on purpose).
+-- Re-run it after any migration that adds tables (default privileges are not used on purpose).
 --
 -- Prerequisites
 --  * Tables are owned by a migrator/owner role (not by :app_role or :retention_role). Migrations run as that owner:
@@ -10,6 +10,7 @@
 -- 1. App role: normal read/write on application tables ...
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :app_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :app_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :app_role;
 -- ... except the audit tables: it may add audit entries and move the chain head, nothing else.
 REVOKE ALL ON audit_log, audit_chain, audit_archive FROM :app_role;
 GRANT SELECT, INSERT ON audit_log TO :app_role;

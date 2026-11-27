@@ -176,6 +176,8 @@ If the new release fails `/api/ready`, the script switches back to the previous 
 
 Migrations only move forward. Rolling back the code does not undo a schema change. The migrations shipped so far only add tables and columns, so older code keeps working on a newer schema. Take a backup before deploying a release that contains a new migration (`server/db/migrations/`).
 
+If the app runs under a restricted database role (`DB_SKIP_MIGRATIONS=1`, see `docs/ADMIN_OPERATIONS.md` section 5), it does not apply migrations itself. Before restarting onto a release with a new migration, run `DATABASE_URL=<owner role url> npm run db:migrate` (from the new release directory), re-run `docs/audit-roles.sql` if tables were added, then restart. Until then `/api/ready` returns 503 and `scripts/deploy.sh` rolls back.
+
 ## 13. Scaling beyond one server
 
 1. Set `REDIS_URL` on every instance. Rate limits and group rooms are then shared.

@@ -24,6 +24,8 @@ function getDb() {
   dbPromise ??= (async () => {
     const db = await createDb({dataDir: pgliteDirFromEnv(root)});
     backendName = db.backend;
+    // A restricted (insert-only audit) role cannot DELETE audit rows, so the in-app cap would fail on every append.
+    if (process.env.DB_SKIP_MIGRATIONS === '1' && Number(process.env.AUDIT_MAX_ENTRIES || 0) > 0) log('warn', 'AUDIT_MAX_ENTRIES is set while DB_SKIP_MIGRATIONS=1 (restricted database role): the app cannot delete audit rows. Unset AUDIT_MAX_ENTRIES for the app and run `npm run audit:retention` with the retention role instead.');
     const r = await autoImport(db, {jsonFile: legacyFile});
     if (r.imported) log('info', 'legacy data imported', {source: r.source, counts: r.counts});
     return db;
