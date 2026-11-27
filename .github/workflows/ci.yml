@@ -66,12 +66,19 @@ jobs:
     env:
       DATABASE_URL: postgres://usam:ci-only-password@127.0.0.1:5432/usam_ci
       REDIS_URL: redis://127.0.0.1:6379
+      # tests/backup-restore.test.mjs runs scripts/backup.sh and restore.sh with the PostgreSQL tools on this runner.
+      PG_TOOLS_LOCAL: '1'
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-node@v4.4.0
         with:
           node-version: 20.18.1
           cache: npm
+      # pg_dump / pg_restore must match the server's major version (16).
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client-16
+      - run: /usr/lib/postgresql/16/bin/pg_dump --version
+      # Put the 16 tools first on PATH, whatever else the runner image ships.
+      - run: echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - run: npm ci
       - run: npm test
 

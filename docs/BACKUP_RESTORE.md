@@ -3,7 +3,10 @@
 Primary data is in PostgreSQL. Backups are `pg_dump` custom-format archives with a SHA-256 checksum.
 Verified by `tests/backup-restore.test.mjs` (real scripts on Linux, PostgreSQL 16): backup -> restore into a new
 database -> the app on the restored database signs in learners and admins, keeps progress and paid access, and the
-audit chain verifies. **Not yet repeated on AWS/RDS** - do that during staging setup.
+audit chain verifies. CI runs this drill on every PR in the `postgres-redis` job (PostgreSQL 16 service, `postgresql-client-16`
+tools, `PG_TOOLS_LOCAL=1`); row counts of every table are compared, and the log ends with a line starting
+`restore drill proof:`. Locally use `PG_TOOLS_LOCAL=1` (tools on PATH) or `PG_TOOLS_CONTAINER=<container>`.
+**Not yet repeated on AWS/RDS or on the live database** - do that during staging setup.
 
 ## What is backed up, and what is not
 
