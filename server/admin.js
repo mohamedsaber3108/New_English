@@ -15,6 +15,7 @@ import express from 'express';
 import {readFile} from 'node:fs/promises';
 import {randomBytes, randomUUID, createHash, timingSafeEqual} from 'node:crypto';
 import {passwordHash, checkPassword, dummyCheck, validPassword} from './passwords.js';
+import {learnerDay} from './learning.js';
 import {newSecret, verifyTotp, otpauthUri, sealSecret, openSecret, base32Encode} from './totp.js';
 import {isUniqueViolation} from './db/index.js';
 
@@ -296,6 +297,16 @@ export function adminRouter(customer, {leadsFile, integrations = () => ({}), con
   // ---------------- Overview ----------------
   router.get('/admin/overview', requireAdmin('dashboard.read'), async (_req, res) => {
     try { res.json({...await repo.overview(await db()), integrations: integrations(), configWarnings: configFindings()}); } catch (e) { fail(res, e); }
+  });
+
+  // AI usage (E-8): per Cairo day totals and the top learners by estimated cost. Numbers and learner ids only; no message text is stored.
+  router.get('/admin/ai-usage', requireAdmin('dashboard.read'), async (req, res) => {
+    try {
+      const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 30));
+      const data = await repo.aiUsage.summary(await db(), {sinceDay: learnerDay(Date.now() - (days - 1) * 86400000), limit: 10});
+      const total = data.days.reduce((a, d) => ({calls: a.calls + d.calls, tokensIn: a.tokensIn + d.tokensIn, tokensOut: a.tokensOut + d.tokensOut, costMicroUsd: a.costMicroUsd + d.costMicroUsd}), {calls: 0, tokensIn: 0, tokensOut: 0, costMicroUsd: 0});
+      res.json({windowDays: days, priceConfigured: !!(Number(process.env.AI_PRICE_IN_PER_1K_MICRO) || Number(process.env.AI_PRICE_OUT_PER_1K_MICRO)), costUnit: 'micro-USD (1,000,000 = USD 1); 0 until AI_PRICE_IN_PER_1K_MICRO / AI_PRICE_OUT_PER_1K_MICRO are set', total, days: data.days, topLearners: data.topLearners});
+    } catch (e) { fail(res, e); }
   });
 
   // ---------------- Users ----------------

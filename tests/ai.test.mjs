@@ -81,7 +81,7 @@ try {
 
   // ---- metrics + secrecy ----
   const m = await (await fetch(o + '/api/metrics', {headers: {Authorization: 'Bearer metrics-token-0123456789'}})).text();
-  ok(/ai_tokens_total\{feature="coach",type="prompt"\} \d+/.test(m) && /ai_requests_total\{feature="coach",outcome="ok"\} \d+/.test(m) && /ai_requests_total\{feature="coach",outcome="http_503"\} \d+/.test(m), 'metrics count AI requests by outcome and token usage (cost monitoring)');
+  ok(/ai_tokens_total\{direction="in",feature="coach"\} \d+/.test(m) && /ai_tokens_total\{direction="out",feature="coach"\} \d+/.test(m) && /ai_calls_total\{feature="coach"\} \d+/.test(m) && /ai_cost_micro_usd_total\{feature="coach"\} \d+/.test(m) && /ai_requests_total\{feature="coach",outcome="ok"\} \d+/.test(m) && /ai_requests_total\{feature="coach",outcome="http_503"\} \d+/.test(m), 'metrics count AI requests by outcome and token usage (cost monitoring)');
   await sleep(200);
   ok(!JSON.stringify([c1, s1, s2, q]).includes(KEY) && !logs.includes(KEY) && !m.includes(KEY), 'the API key never appears in responses, logs or metrics');
 } catch (e) { console.error('  FAIL: unexpected error', e); failures++; }

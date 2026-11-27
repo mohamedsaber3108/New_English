@@ -19,6 +19,13 @@ export function learnerDay(ts = Date.now()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', {timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit'}).formatToParts(new Date(ts)).map(x => [x.type, x.value]));
   return `${p.year}-${p.month}-${p.day}`;
 }
+// Milliseconds from `ts` to the next midnight in Cairo (when the daily AI cap resets). At least 1 second.
+// shortcut: on the two days a year when Cairo changes its clock this is off by one hour; fine for a "resets in about" message.
+export function msUntilCairoMidnight(ts = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {timeZone: 'Africa/Cairo', hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit'}).formatToParts(new Date(ts)).map(x => [x.type, x.value]));
+  const sinceMidnight = (Number(p.hour) * 3600 + Number(p.minute) * 60 + Number(p.second)) * 1000 + (ts % 1000);
+  return Math.max(1000, 86400000 - sinceMidnight);
+}
 const prevDay = d => { const t = new Date(d + 'T12:00:00Z'); t.setUTCDate(t.getUTCDate() - 1); return t.toISOString().slice(0, 10); };
 
 // Consecutive active days ending today or yesterday (a streak survives until the end of the next day).

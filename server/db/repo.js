@@ -122,6 +122,27 @@ export const orders = {
 // ---------------------------------------------------------------- support tickets
 const toTicket = r => r && clean({reference: r.reference, userId: r.user_id, category: r.category, subject: r.subject, message: r.message, status: r.status, resolution: r.resolution, createdAt: iso(r.created_at), updatedAt: iso(r.updated_at), updatedBy: r.updated_by,
   ...(r.c_email !== undefined ? {customer: r.c_id ? {id: r.c_id, name: r.c_name, email: r.c_email} : null} : {})});
+// ---------------------------------------------------------------- AI usage (E-8): numbers only, never message text
+export const aiUsage = {
+  // Adds one call's numbers to the learner's row for this Cairo day and route.
+  async add(q, {userId, day, route, tokensIn = 0, tokensOut = 0, costMicro = 0}) {
+    await q.query(`INSERT INTO ai_usage (user_id, day, route, calls, tokens_in, tokens_out, est_cost_micro_usd) VALUES ($1,$2,$3,1,$4,$5,$6)
+      ON CONFLICT (user_id, day, route) DO UPDATE SET calls = ai_usage.calls + 1, tokens_in = ai_usage.tokens_in + EXCLUDED.tokens_in,
+        tokens_out = ai_usage.tokens_out + EXCLUDED.tokens_out, est_cost_micro_usd = ai_usage.est_cost_micro_usd + EXCLUDED.est_cost_micro_usd`,
+      [userId, day, route, Math.max(0, Math.round(tokensIn)), Math.max(0, Math.round(tokensOut)), Math.max(0, Math.round(costMicro))]);
+  },
+  // Per-day totals for the last `days` Cairo days (newest first) and the top learners by cost (ids only).
+  async summary(q, {sinceDay, limit = 10}) {
+    const days = (await q.query(`SELECT day, sum(calls)::bigint AS calls, sum(tokens_in)::bigint AS tokens_in, sum(tokens_out)::bigint AS tokens_out, sum(est_cost_micro_usd)::bigint AS cost,
+      count(DISTINCT user_id)::bigint AS learners FROM ai_usage WHERE day >= $1 GROUP BY day ORDER BY day DESC`, [sinceDay])).rows
+      .map(r => ({day: r.day, calls: Number(r.calls), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), costMicroUsd: Number(r.cost), learners: Number(r.learners)}));
+    const top = (await q.query(`SELECT user_id, sum(calls)::bigint AS calls, sum(tokens_in)::bigint AS tokens_in, sum(tokens_out)::bigint AS tokens_out, sum(est_cost_micro_usd)::bigint AS cost
+      FROM ai_usage WHERE day >= $1 GROUP BY user_id ORDER BY cost DESC, calls DESC, user_id LIMIT $2`, [sinceDay, Math.min(50, Math.max(1, limit))])).rows
+      .map(r => ({userId: r.user_id, calls: Number(r.calls), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), costMicroUsd: Number(r.cost)}));
+    return {days, topLearners: top};
+  },
+};
+
 export const tickets = {
   async create(q, t) { await q.query('INSERT INTO support_tickets (reference, user_id, category, subject, message, status, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [t.reference, t.userId, t.category, t.subject, t.message, t.status, t.createdAt, t.updatedAt]); },
   async listForUser(q, userId) { return (await q.query('SELECT * FROM support_tickets WHERE user_id = $1 ORDER BY created_at DESC', [userId])).rows.map(toTicket); },
